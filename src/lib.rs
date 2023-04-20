@@ -1,33 +1,18 @@
 use std::error::Error;
 use hyper::{Method, StatusCode};
-use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-#[derive(Serialize, Deserialize, Debug)]
-#[allow(non_snake_case)]
-pub struct ContainerCreate {
-    pub Image: String,
-    pub Entrypoint: Vec<String>,
-    pub HostConfig: Option<HostConfigCreate>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[allow(non_snake_case)]
-pub struct HostConfigCreate {
-    pub NetworkMode: Option<String>,
-}
 
 pub fn create_container(program: String, arguments: &[String]) -> Result<(StatusCode, Value), Box<dyn Error>> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program);
     let result = docker_client::body_request(Method::POST, "/containers/create",
-                              serde_json::to_value(ContainerCreate {
-                                  Image: "empty".to_string(),
-                                  Entrypoint: entrypoint,
-                                  HostConfig: Some(HostConfigCreate {
-                                      NetworkMode: Some("none".to_string())
-                                  }),
-                              }).expect("JSON create"))?;
+                                             json!({
+                                  "Image": "empty",
+                                  "Entrypoint": entrypoint,
+                                  "HostConfig": {
+                                      "NetworkMode": "none"
+                                  },
+                              }))?;
     Ok(result)
 }
 
