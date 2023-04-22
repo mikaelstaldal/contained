@@ -1,3 +1,7 @@
+//! # Contained
+//!
+//! Run a program in a Docker container.
+
 use std::env;
 use std::env::Args;
 use std::error::Error;

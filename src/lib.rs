@@ -1,7 +1,12 @@
+//! # Contained
+//!
+//! Run a program in a Docker container.
+
 use std::error::Error;
 use hyper::{Method, StatusCode};
 use serde_json::{json, Value};
 
+/// Create a Docker container.
 pub fn create_container(program: String, arguments: &[String]) -> Result<(StatusCode, Value), Box<dyn Error>> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program);
@@ -17,6 +22,10 @@ pub fn create_container(program: String, arguments: &[String]) -> Result<(Status
 }
 
 pub mod docker_client {
+    //! # Docker Client
+    //!
+    //! `docker_client` contains functions to call the Docker daemon.
+
     use std::error::Error;
     use futures::{FutureExt, TryFutureExt};
     use hyper::{Body, Client, Method, Request, StatusCode};
@@ -26,6 +35,7 @@ pub mod docker_client {
 
     const DOCKER_SOCK: &str = "/var/run/docker.sock";
 
+    /// Make a request to the Docker daemon without a body.
     pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), Box<dyn Error>> {
         let req = Request::builder()
             .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
@@ -37,6 +47,7 @@ pub mod docker_client {
         make_request(req)
     }
 
+    /// Make a request to the Docker daemon with a body.
     pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Value), Box<dyn Error>> {
         let req = Request::builder()
             .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
