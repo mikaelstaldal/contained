@@ -3,6 +3,7 @@ name = "contained"
 version = "0.1.0"
 edition = "2021"
 description = "Run a program in a Docker container for sandboxing"
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
