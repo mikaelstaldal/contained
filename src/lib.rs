@@ -4,13 +4,19 @@
 
 use std::error::Error;
 use hyper::{Method, StatusCode};
-use serde_json::{json, Value};
+use serde_json::json;
 
-/// Create a Docker container.
-pub fn create_container(program: String, arguments: &[String]) -> Result<(StatusCode, Value), Box<dyn Error>> {
+pub fn run(program: String, arguments: &[String]) -> Result<String, Box<dyn Error>> {
+    let id = create_container(program, arguments)?;
+    start_container(&id)?;
+    Ok(id)
+}
+
+/// Creates a Docker container.
+fn create_container(program: String, arguments: &[String]) -> Result<String, Box<dyn Error>> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program);
-    let result = docker_client::body_request(Method::POST, "/containers/create",
+    let (status, body) = docker_client::body_request(Method::POST, "/containers/create",
                                              json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
@@ -18,7 +24,22 @@ pub fn create_container(program: String, arguments: &[String]) -> Result<(Status
                                       "NetworkMode": "none"
                                   },
                               }))?;
-    Ok(result)
+    if status == StatusCode::CREATED {
+        let id = body["Id"].as_str().expect("Container creation failed");
+        Ok(id.to_string())
+    } else {
+        Err(Box::<dyn Error>::from(body["message"].as_str().unwrap_or(&format!("Container creation failed: {status}"))))
+    }
 }
 
-pub mod docker_client;
+/// Starts a Docker container.
+fn start_container(id: &str) -> Result<(), Box<dyn Error>> {
+    let (status, body) = docker_client::empty_request(Method::POST, &format!("/containers/{id}/start"))?;
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(Box::<dyn Error>::from(body["message"].as_str().unwrap_or(&format!("Container start failed: {status}"))))
+    }
+}
+
+mod docker_client;

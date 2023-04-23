@@ -5,7 +5,7 @@
 use std::env;
 use std::env::Args;
 use std::error::Error;
-use contained::create_container;
+use contained::run;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args: Args = env::args();
@@ -13,9 +13,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let program: String = args.next().ok_or("No program specified")?;
     let arguments: Vec<String> = args.collect();
 
-    let (status_code, value) = create_container(program, &arguments)?;
-    println!("{status_code}");
-    println!("{value}");
-
+    let id = run(program, &arguments)?;
+    println!("{id}");
     Ok(())
 }
