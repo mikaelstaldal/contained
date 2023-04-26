@@ -2,7 +2,6 @@
 //!
 //! `docker_client` contains functions to call the Docker daemon.
 
-use std::error::Error;
 use futures::{FutureExt, TryFutureExt};
 use hyper::{Body, Client, Method, Request, StatusCode};
 use hyperlocal::{UnixClientExt, Uri};
@@ -12,7 +11,7 @@ use tokio::runtime::Runtime;
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
 
 /// Make a request to the Docker daemon without a body.
-pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), Box<dyn Error>> {
+pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), anyhow::Error> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
         .header("Accept", "application/json")
@@ -24,7 +23,7 @@ pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), B
 }
 
 /// Make a request to the Docker daemon with a body.
-pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Value), Box<dyn Error>> {
+pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Value), anyhow::Error> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
         .header("Content-Type", "application/json")
@@ -36,7 +35,7 @@ pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCod
     make_request(req)
 }
 
-fn make_request(req: Request<Body>) -> Result<(StatusCode, Value), Box<dyn Error>> {
+fn make_request(req: Request<Body>) -> Result<(StatusCode, Value), anyhow::Error> {
     let client = Client::unix();
     let runtime = Runtime::new().unwrap();
     let response = runtime.block_on(
@@ -56,6 +55,6 @@ fn make_request(req: Request<Body>) -> Result<(StatusCode, Value), Box<dyn Error
             let json = serde_json::from_slice(&body.to_vec())?;
             Ok((status_code, json))
         }
-        Err(e) => Err(Box::new(e))
+        Err(e) => Err(e.into())
     }
 }

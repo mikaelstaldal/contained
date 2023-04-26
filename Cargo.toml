@@ -15,3 +15,5 @@ hyper = "0.14.25"
 hyperlocal = "0.8.0"
 futures = "0.3.28"
 tokio = { version = "1.27.0", features = ["full"] }
+thiserror = "1.0"
+anyhow = "1.0"
