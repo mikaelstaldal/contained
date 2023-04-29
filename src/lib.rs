@@ -5,15 +5,7 @@
 use anyhow::Context;
 use hyper::{Method, StatusCode};
 use serde_json::json;
-use crate::DockerError::{ErrorResponse, InvalidResponse};
-
-#[derive(thiserror::Error, Debug)]
-pub enum DockerError {
-    #[error("Error from docker daemon: [{0}] {1}")]
-    ErrorResponse(u16, String),
-    #[error("Invalid response from Docker daemon: [{0}] {1}")]
-    InvalidResponse(u16, String)
-}
+use docker_client::DockerError::{self, ErrorResponse, InvalidResponse};
 
 pub fn run(program: String, arguments: &[String]) -> Result<String, anyhow::Error> {
     let id = create_container(program, arguments).context("Unable to create container")?;
@@ -22,7 +14,7 @@ pub fn run(program: String, arguments: &[String]) -> Result<String, anyhow::Erro
 }
 
 /// Creates a Docker container.
-fn create_container(program: String, arguments: &[String]) -> Result<String, anyhow::Error> {
+fn create_container(program: String, arguments: &[String]) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program);
     let (status, body) = docker_client::body_request(Method::POST, "/containers/create",
@@ -42,7 +34,7 @@ fn create_container(program: String, arguments: &[String]) -> Result<String, any
 }
 
 /// Starts a Docker container.
-fn start_container(id: &str) -> Result<(), anyhow::Error> {
+fn start_container(id: &str) -> Result<(), DockerError> {
     let (status, body) = docker_client::empty_request(Method::POST, &format!("/containers/{id}/start"))?;
     if status.is_success() {
         Ok(())
