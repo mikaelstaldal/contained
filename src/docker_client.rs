@@ -67,7 +67,7 @@ pub fn create_container(program: &str, arguments: &[String], binds: &[Bind]) -> 
         let id = body["Id"].as_str().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
         Ok(id.to_string())
     } else {
-        Err(ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or("Container creation failed").to_string()).into())
+        Err(make_error_response(status, body, "Container creation failed"))
     }
 }
 
@@ -78,14 +78,18 @@ pub fn start_container(id: &str) -> Result<(), DockerError> {
         Ok(())
     } else {
         let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
-        Err(ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or("Container start failed").to_string()).into())
+        Err(make_error_response(status, body, "Container start failed"))
     }
+}
+
+fn make_error_response(status: StatusCode, body: Value, fallback_error_message: &str) -> DockerError {
+    ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or(fallback_error_message).to_string())
 }
 
 /// Make a request to the Docker daemon without a body.
 fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
-        .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
+        .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
         .header("Accept", "application/json")
         .method(method)
         .body(Body::empty())
@@ -97,7 +101,7 @@ fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>
 /// Make a request to the Docker daemon with a body.
 fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
-        .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
+        .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .method(method)
