@@ -42,7 +42,7 @@ impl<'a> Bind<'a> {
 }
 
 /// Creates a Docker container.
-pub fn create_container(program: &str, arguments: &[String], binds: &[Bind]) -> Result<String, DockerError> {
+pub fn create_container(program: &str, arguments: &[String], binds: &[Bind], network: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
@@ -50,7 +50,7 @@ pub fn create_container(program: &str, arguments: &[String], binds: &[Bind]) -> 
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
                                   "HostConfig": {
-                                      "NetworkMode": "none",
+                                      "NetworkMode": network,
                                       "Binds": binds.into_iter().map(|bind| format!("{}:{}{}",
                                                                  bind.host_source,
                                                                  bind.container_dest,

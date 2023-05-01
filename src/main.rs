@@ -2,18 +2,25 @@
 //!
 //! Run a program in a Docker container.
 
-use std::env;
-use std::env::Args;
-use anyhow::anyhow;
+use clap::Parser;
 use contained::run;
 
-fn main() -> Result<(), anyhow::Error> {
-    let mut args: Args = env::args();
-    args.next(); // ignore my own program name
-    let program: String = args.next().ok_or(anyhow!("No program specified"))?;
-    let arguments: Vec<String> = args.collect();
+#[derive(Parser)]
+struct Cli {
+    /// The program to run
+    program: std::path::PathBuf,
 
-    let id = run(program.into(), &arguments)?;
+    /// Arguments to the programs
+    arguments: Vec<String>,
+
+    /// Network mode
+    #[arg(long, default_value = "none")]
+    network: String
+}
+
+fn main() -> Result<(), anyhow::Error> {
+    let args = Cli::parse();
+    let id = run(args.program, &args.arguments, &args.network)?;
     println!("{id}");
     Ok(())
 }
