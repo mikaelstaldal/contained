@@ -5,9 +5,11 @@
 use futures::{FutureExt, TryFutureExt};
 use hyper::{Body, Client, Method, Request, StatusCode};
 use hyperlocal::{UnixClientExt, Uri};
+use serde_json::json;
 use serde_json::Value;
 use tokio::runtime::Runtime;
 use crate::docker_client::DockerError::InvalidJson;
+use DockerError::{ErrorResponse, InvalidResponse};
 
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
 
@@ -23,8 +25,65 @@ pub enum DockerError {
     InvalidJson(u16, String, #[source] serde_json::Error),
 }
 
+pub struct Bind<'a> {
+    host_source: &'a str,
+    container_dest: &'a str,
+    options: &'a [&'a str],
+}
+
+impl<'a> Bind<'a> {
+    pub fn new(host_source: &'a str, container_dest: &'a str, options: &'a [&'a str]) -> Self {
+        Self {
+            host_source,
+            container_dest,
+            options,
+        }
+    }
+}
+
+/// Creates a Docker container.
+pub fn create_container(program: &str, arguments: &[String], binds: &[Bind]) -> Result<String, DockerError> {
+    let mut entrypoint = arguments.to_vec();
+    entrypoint.insert(0, program.to_string());
+    let (status, maybe_body) = body_request(Method::POST, "/containers/create",
+                                            json!({
+                                  "Image": "empty",
+                                  "Entrypoint": entrypoint,
+                                  "HostConfig": {
+                                      "NetworkMode": "none",
+                                      "Binds": binds.into_iter().map(|bind| format!("{}:{}{}",
+                                                                 bind.host_source,
+                                                                 bind.container_dest,
+                                                                 if bind.options.len() > 0 {
+                                                                    format!(":{}", bind.options.join(","))
+                                                                 } else {
+                                                                    "".to_string()
+                                                                 }))
+                                                    .collect::<Vec<String>>()
+                                  },
+                              }))?;
+    let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
+    if status == StatusCode::CREATED {
+        let id = body["Id"].as_str().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
+        Ok(id.to_string())
+    } else {
+        Err(ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or("Container creation failed").to_string()).into())
+    }
+}
+
+/// Starts a Docker container.
+pub fn start_container(id: &str) -> Result<(), DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/start"))?;
+    if status.is_success() {
+        Ok(())
+    } else {
+        let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
+        Err(ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or("Container start failed").to_string()).into())
+    }
+}
+
 /// Make a request to the Docker daemon without a body.
-pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), DockerError> {
+fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
         .header("Accept", "application/json")
@@ -36,7 +95,7 @@ pub fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Value), D
 }
 
 /// Make a request to the Docker daemon with a body.
-pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Value), DockerError> {
+fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url).into())
         .header("Content-Type", "application/json")
@@ -48,7 +107,7 @@ pub fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCod
     make_request(req)
 }
 
-fn make_request(req: Request<Body>) -> Result<(StatusCode, Value), DockerError> {
+fn make_request(req: Request<Body>) -> Result<(StatusCode, Option<Value>), DockerError> {
     let client = Client::unix();
     let runtime = Runtime::new().unwrap();
     let response = runtime.block_on(
@@ -65,9 +124,14 @@ fn make_request(req: Request<Body>) -> Result<(StatusCode, Value), DockerError> 
 
     match response {
         Ok((status_code, body)) => {
-            let json = serde_json::from_slice(&body.to_vec()).map_err(|err|
-                InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
-            )?;
+            let raw_body: &[u8] = &body.to_vec();
+            let json = if raw_body.len() > 0 {
+                Some(serde_json::from_slice(raw_body).map_err(|err|
+                    InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
+                )?)
+            } else {
+                None
+            };
             Ok((status_code, json))
         }
         Err(e) => Err(e.into())
