@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use crate::docker_client::{create_container, start_container, Bind};
 
-const SYSTEM_MOUNTS: [&str; 6] = ["/bin", "/lib", "/lib32", "/lib64", "/libx32", "/usr"];
+const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 
 pub fn run(program: PathBuf, arguments: &[String], network: &str) -> Result<String, anyhow::Error> {
     let program_dir = program.parent().expect("Invalid path").to_str().expect("Program name is not valid Unicode");
