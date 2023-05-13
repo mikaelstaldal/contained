@@ -2,6 +2,7 @@
 //!
 //! `docker_client` contains functions to call the Docker daemon.
 
+use std::collections::HashMap;
 use futures::{FutureExt, TryFutureExt};
 use hyper::{Body, Client, Method, Request, StatusCode};
 use hyperlocal::{UnixClientExt, Uri};
@@ -41,14 +42,35 @@ impl<'a> Bind<'a> {
     }
 }
 
+pub struct Tmpfs<'a> {
+    container_dest: &'a str,
+    options: &'a [&'a str],
+}
+
+impl<'a> Tmpfs<'a> {
+    pub fn new(container_dest: &'a str, options: &'a [&'a str]) -> Self {
+        Self {
+            container_dest,
+            options,
+        }
+    }
+}
+
 /// Creates a Docker container.
-pub fn create_container(program: &str, arguments: &[String], binds: &[Bind], network: &str) -> Result<String, DockerError> {
+pub fn create_container(program: &str,
+                        arguments: &[String],
+                        binds: &[Bind],
+                        network: &str,
+                        readonly_rootfs: bool,
+                        tmpfs: &[Tmpfs]) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
+                                  "AttachStdout": true,
+                                  "AttachStderr": true,
                                   "HostConfig": {
                                       "NetworkMode": network,
                                       "Binds": binds.into_iter().map(|bind| format!("{}:{}{}",
@@ -59,7 +81,10 @@ pub fn create_container(program: &str, arguments: &[String], binds: &[Bind], net
                                                                  } else {
                                                                     "".to_string()
                                                                  }))
-                                                    .collect::<Vec<String>>()
+                                                    .collect::<Vec<String>>(),
+                                      "ReadonlyRootfs": readonly_rootfs,
+                                      "Tmpfs": tmpfs.into_iter().map(|tmp| (tmp.container_dest.to_string(), tmp.options.join(",")))
+                                                    .collect::<HashMap<String, String>>(),
                                   },
                               }))?;
     let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use anyhow::Context;
-use crate::docker_client::{create_container, start_container, Bind};
+use crate::docker_client::{create_container, start_container, Bind, Tmpfs};
 
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 
@@ -20,7 +20,11 @@ pub fn run(program: PathBuf, arguments: &[String], network: &str) -> Result<Stri
         program.to_str().expect("Program name is not valid Unicode"),
         arguments,
         &binds,
-        network).context("Unable to create container")?;
+        network,
+        true,
+        &[Tmpfs::new("/tmp", &["rw", "noexec"]),
+            Tmpfs::new("/var/tmp", &["rw", "noexec"])])
+        .context("Unable to create container")?;
     start_container(&id).context("Unable to start container")?;
     Ok(id)
 }
