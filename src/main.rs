@@ -15,12 +15,16 @@ struct Cli {
 
     /// Network mode
     #[arg(long, default_value = "none")]
-    network: String
+    network: String,
+
+    /// Current dir writable
+    #[arg(long)]
+    current_dir_writable: bool
 }
 
 fn main() -> Result<(), anyhow::Error> {
     let args = Cli::parse();
-    let id = run(args.program, &args.arguments, &args.network)?;
+    let id = run(args.program, &args.arguments, &args.network, args.current_dir_writable)?;
     println!("{id}");
     Ok(())
 }
