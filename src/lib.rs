@@ -31,7 +31,7 @@ pub fn run(program: PathBuf, arguments: &[String], network: &str, current_dir_wr
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])))
         .context("Unable to create container")?;
     start_container(&runtime, &id).context("Unable to start container")?;
-    attach_container(&runtime, &id)/*.context("Unable to attach to container")? */;
+    attach_container(&runtime, &id);
     let status_code = wait_container(&runtime, &id).context("Unable to start container")?;
     Ok((id, status_code))
 }

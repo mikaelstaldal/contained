@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 use futures::{FutureExt, TryFutureExt};
-use hyper::{Body, Client, Method, Request, StatusCode};
+use hyper::{Body, Client, Method, Request, Response, StatusCode};
 use hyper::body::HttpBody;
 use hyperlocal::{UnixClientExt, Uri};
 use serde_json::json;
@@ -111,8 +111,8 @@ pub fn start_container(runtime: &Runtime, id: &str) -> Result<(), DockerError> {
     }
 }
 
-/// Attach to a Docker container and stream the output until it exits.
-pub fn attach_container(runtime: &Runtime, id: &str) /* -> Result<(), DockerError> */ {
+/// Attach to a Docker container and stream the output.
+pub fn attach_container(runtime: &Runtime, id: &str) {
     let method = Method::POST;
     let url = &format!("/containers/{id}/attach?logs=true&stream=true&stdout=true&stderr=true");
     let req = Request::builder()
@@ -120,38 +120,26 @@ pub fn attach_container(runtime: &Runtime, id: &str) /* -> Result<(), DockerErro
         .method(method)
         .body(Body::empty())
         .expect("failed to build request");
-    runtime.spawn(streaming_request(req)); // TODO handle errors in thread
+    runtime.spawn(streaming_request(req));
 }
 
-async fn streaming_request(req: Request<Body>) -> Result<(), DockerError> {
+async fn streaming_request(req: Request<Body>) {
     let client = Client::unix();
-    let mut response = client.request(req).await.expect("Request error"); // TODO return Err instead of panic
+    let mut response = client.request(req).await.expect("Unable to make attach request");
     if response.status().is_success() || response.status().is_informational() {
-        while let Some(next) = response.data().await {
-            let chunk = next.expect("Error reading from container");
-            io::stdout().write_all(&chunk).expect("Error writing to stdout");
-            io::stdout().flush().expect("Error flushing stdout");
-        }
-        Ok(())
+        handle_stream(&mut response).await;
     } else {
-        Err(ErrorResponse(404, "Unable to attach".to_string()))
+        panic!("{}", parse_error_response(response, "Unable to attach").await.unwrap_err());
     }
 }
 
-/*
-fn parse_error_response(response: Response<Body>) -> DockerError {
-    let response = runtime.block_on(
-    let body = hyper::body::to_bytes(response.into_body())
-        .map(move |body| {
-            body?.to_vec()
-        });
-    let raw_body: &[u8] = &body.to_vec();
-    let json = serde_json::from_slice(raw_body).map_err(|err|
-        InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
-    );
-    make_error_response(status, json, "Container attach failed")
+async fn handle_stream(response: &mut Response<Body>) {
+    while let Some(next) = response.data().await {
+        let chunk = next.expect("Error reading from container");
+        io::stdout().write_all(&chunk).expect("Error writing to stdout");
+        io::stdout().flush().expect("Error flushing stdout");
+    }
 }
- */
 
 /// Wait for a Docker container.
 pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
@@ -163,10 +151,6 @@ pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
     } else {
         Err(make_error_response(status, body, "Container wait failed"))
     }
-}
-
-fn make_error_response(status: StatusCode, body: Value, fallback_error_message: &str) -> DockerError {
-    ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or(fallback_error_message).to_string())
 }
 
 /// Make a request to the Docker daemon without a body.
@@ -222,4 +206,18 @@ fn make_request(runtime: &Runtime, req: Request<Body>) -> Result<(StatusCode, Op
         }
         Err(e) => Err(e.into())
     }
+}
+
+async fn parse_error_response(response: Response<Body>, fallback_error_message: &str) -> Result<(), DockerError> {
+    let status = response.status();
+    let body = hyper::body::to_bytes(response.into_body()).await?;
+    let raw_body = body.to_vec();
+    let json = serde_json::from_slice(&raw_body).map_err(|err|
+        InvalidJson(status.into(), String::from_utf8(raw_body).unwrap_or(String::from("")), err)
+    )?;
+    Err(make_error_response(status, json, fallback_error_message))
+}
+
+fn make_error_response(status: StatusCode, body: Value, fallback_error_message: &str) -> DockerError {
+    ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or(fallback_error_message).to_string())
 }
