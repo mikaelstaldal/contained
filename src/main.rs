@@ -2,6 +2,7 @@
 //!
 //! Run a program in a Docker container.
 
+use std::process::ExitCode;
 use clap::Parser;
 use contained::run;
 
@@ -22,9 +23,8 @@ struct Cli {
     current_dir_writable: bool
 }
 
-fn main() -> Result<(), anyhow::Error> {
+fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
-    let id = run(args.program, &args.arguments, &args.network, args.current_dir_writable)?;
-    println!("{id}");
-    Ok(())
+    let (_, status_code) = run(args.program, &args.arguments, &args.network, args.current_dir_writable)?;
+    Ok(ExitCode::from(status_code))
 }
