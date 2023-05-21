@@ -18,13 +18,17 @@ struct Cli {
     #[arg(long, default_value = "none")]
     network: String,
 
-    /// Program dir writable
+    /// Mount current directory
     #[arg(long)]
-    program_dir_writable: bool
+    current_dir: bool,
+
+    /// Mount current directory writable
+    #[arg(long, requires = "current_dir")]
+    writable: bool
 }
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
-    let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.program_dir_writable)?;
+    let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.current_dir, args.writable)?;
     Ok(ExitCode::from(status_code))
 }

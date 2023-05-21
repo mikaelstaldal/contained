@@ -2,6 +2,7 @@
 //!
 //! Run a program in a Docker container.
 
+use std::env::current_dir;
 use std::fs;
 use std::path::Path;
 use anyhow::{anyhow, Context};
@@ -11,13 +12,18 @@ use crate::docker_client::{attach_container, create_container, start_container, 
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 
-pub fn run(program: &Path, arguments: &[String], network: &str, program_dir_writable: bool) -> Result<(String, u8), anyhow::Error> {
+pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, writable: bool) -> Result<(String, u8), anyhow::Error> {
     let runtime = Runtime::new()?;
 
     let program = fs::canonicalize(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?;
-    let current_dir_bind_option = [if program_dir_writable { "rw" } else { "ro" }];
-    let mut binds = vec![Bind::new(program_dir, program_dir, &current_dir_bind_option)];
+    let mut binds = vec![Bind::new(program_dir, program_dir, &["ro"])];
+    let current_dir = current_dir()?;
+    let current_dir_str = current_dir.to_str().ok_or(anyhow!("Current dir is not valid Unicode"))?;
+    let current_dir_bind_option = [if writable { "rw" } else { "ro" }];
+    if mount_current_dir {
+        binds.push(Bind::new(current_dir_str, current_dir_str, &current_dir_bind_option));
+    }
     for path in SYSTEM_MOUNTS {
         if Path::new(path).exists() {
             binds.push(Bind::new(path, path, &["ro"]));
