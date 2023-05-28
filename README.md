@@ -1,7 +1,13 @@
-docker run \
-  --mount type=bind,source=/lib64,target=/lib64,readonly \ 
-  --mount type=bind,source=/usr,target=/usr,readonly \ 
-  --mount type=bind,source=/lib,target=/lib,readonly \
-  --mount type=bind,source=/home/mikes/src/rust/hello_world,target=/home/mikes/src/rust/hello_world,readonly \
-  --entrypoint /home/mikes/src/rust/hello_world/main \
-  empty
+# Run a program in a Docker container for sandboxing
+
+## Prerequisites
+
+* This program is made for Linux, and will probably not work on other operating systems.
+* Requires a Docker daemon (but does not use the `docker` command).
+
+## Setup
+
+Build an empty Docker image with:
+```shell
+docker build -t empty .
+```
