@@ -21,8 +21,12 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     let current_dir = current_dir()?;
     let current_dir_str = current_dir.to_str().ok_or(anyhow!("Current dir is not valid Unicode"))?;
     let current_dir_bind_option = [if writable { "rw" } else { "ro" }];
+    let working_dir: &str;
     if mount_current_dir {
         binds.push(Bind::new(current_dir_str, current_dir_str, &current_dir_bind_option));
+        working_dir = current_dir_str;
+    } else {
+        working_dir = "/";
     }
     for path in SYSTEM_MOUNTS {
         if Path::new(path).exists() {
@@ -36,7 +40,8 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         &binds,
         network,
         true,
-        &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])))
+        &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
+        working_dir)
         .context("Unable to create container")?;
     start_container(&runtime, &id).context("Unable to start container")?;
     attach_container(&runtime, &id);

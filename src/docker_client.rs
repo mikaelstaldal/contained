@@ -65,7 +65,8 @@ pub fn create_container(runtime: &Runtime,
                         binds: &[Bind],
                         network: &str,
                         readonly_rootfs: bool,
-                        tmpfs: &[Tmpfs]) -> Result<String, DockerError> {
+                        tmpfs: &[Tmpfs],
+                        working_dir: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let (status, maybe_body) = body_request(runtime, Method::POST, "/containers/create",
@@ -75,6 +76,7 @@ pub fn create_container(runtime: &Runtime,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
                                   "Tty": true,
+                                  "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
                                       "Binds": binds.into_iter().map(|bind| format!("{}:{}{}",
