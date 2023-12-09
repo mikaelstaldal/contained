@@ -62,10 +62,11 @@ impl<'a> Tmpfs<'a> {
 pub fn create_container(runtime: &Runtime,
                         program: &str,
                         arguments: &[String],
-                        binds: &[Bind],
                         network: &str,
-                        readonly_rootfs: bool,
+                        user: &str,
+                        binds: &[Bind],
                         tmpfs: &[Tmpfs],
+                        readonly_rootfs: bool,
                         working_dir: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
@@ -73,6 +74,7 @@ pub fn create_container(runtime: &Runtime,
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
+                                  "User": user,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
                                   "Tty": true,
