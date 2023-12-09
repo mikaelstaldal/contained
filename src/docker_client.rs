@@ -3,7 +3,7 @@
 //! `docker_client` contains functions to call the Docker daemon.
 
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use futures::{FutureExt, TryFutureExt};
 use hyper::{Body, Client, Method, Request, Response, StatusCode};
 use hyper::body::HttpBody;
@@ -69,13 +69,14 @@ pub fn create_container(runtime: &Runtime,
                         working_dir: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
+    let is_a_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let (status, maybe_body) = body_request(runtime, Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
-                                  "Tty": true,
+                                  "Tty": is_a_tty,
                                   "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
