@@ -194,6 +194,7 @@ async fn handle_raw_stream(upgraded: Upgraded) {
     let stdout = io::stdout();
     let mut stdout = stdout.into_raw_mode().expect("Cannot set stdout into raw mode"); // set stdout in raw mode so we can do TTY
 
+    // TODO this loop never terminates
     while let Some(Ok(data)) = read.next().await {
         stdout.write_all(&*data).expect("Error writing to stdout");
         stdout.flush().expect("Error flushing stdout");
