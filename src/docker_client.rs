@@ -3,18 +3,27 @@
 //! `docker_client` contains functions to call the Docker daemon.
 
 use std::collections::HashMap;
-use std::io::{self, IsTerminal, Write};
-use futures::{FutureExt, TryFutureExt};
+use std::io::{self, IsTerminal, Read, Write};
+use std::time::Duration;
+use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::executor::block_on;
 use hyper::{Body, Client, Method, Request, Response, StatusCode};
-use hyper::body::HttpBody;
+use hyper::upgrade::Upgraded;
 use hyperlocal::{UnixClientExt, Uri};
 use serde_json::json;
 use serde_json::Value;
-use tokio::runtime::Runtime;
+use termion::async_stdin;
+use termion::raw::IntoRawMode;
+use tokio::io::{AsyncWriteExt, split};
+use tokio::spawn;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::docker_client::DockerError::InvalidJson;
 use DockerError::{ErrorResponse, InvalidResponse};
 
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
+const DOCKER_API_VERSION: &str = "v1.43";
 
 #[derive(thiserror::Error, Debug)]
 pub enum DockerError {
@@ -59,8 +68,7 @@ impl<'a> Tmpfs<'a> {
 }
 
 /// Creates a Docker container.
-pub fn create_container(runtime: &Runtime,
-                        program: &str,
+pub fn create_container(program: &str,
                         arguments: &[String],
                         network: &str,
                         user: &str,
@@ -71,11 +79,12 @@ pub fn create_container(runtime: &Runtime,
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let is_a_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
-    let (status, maybe_body) = body_request(runtime, Method::POST, "/containers/create",
+    let (status, maybe_body) = body_request(Method::POST, &format!("/{DOCKER_API_VERSION}/containers/create"),
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
                                   "User": user,
+                                  "AttachStdin": true,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
                                   "Tty": is_a_tty,
@@ -106,8 +115,8 @@ pub fn create_container(runtime: &Runtime,
 }
 
 /// Starts a Docker container.
-pub fn start_container(runtime: &Runtime, id: &str) -> Result<(), DockerError> {
-    let (status, maybe_body) = empty_request(runtime, Method::POST, &format!("/containers/{id}/start"))?;
+pub fn start_container(id: &str) -> Result<(), DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/{DOCKER_API_VERSION}/containers/{id}/start"))?;
     if status.is_success() {
         Ok(())
     } else {
@@ -117,38 +126,83 @@ pub fn start_container(runtime: &Runtime, id: &str) -> Result<(), DockerError> {
 }
 
 /// Attach to a Docker container and stream the output.
-pub fn attach_container(runtime: &Runtime, id: &str) {
+pub fn attach_container(id: &str) -> JoinHandle<()> {
     let method = Method::POST;
-    let url = &format!("/containers/{id}/attach?logs=true&stream=true&stdout=true&stderr=true");
+    let url = &format!("/{DOCKER_API_VERSION}/containers/{id}/attach?logs=true&stream=true&stdin=true&stdout=true&stderr=true");
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
         .method(method)
+        .header("Upgrade", "tcp")
+        .header("Connection", "Upgrade")
         .body(Body::empty())
         .expect("failed to build request");
-    runtime.spawn(streaming_request(req));
+    spawn(upgrade_request(req))
 }
 
-async fn streaming_request(req: Request<Body>) {
+async fn upgrade_request(req: Request<Body>) {
     let client = Client::unix();
-    let mut response = client.request(req).await.expect("Unable to make attach request");
-    if response.status().is_success() || response.status().is_informational() {
-        handle_stream(&mut response).await;
+    let response = client.request(req).await.expect("Unable to make attach request");
+    if response.status().is_informational() {
+        let content_type = response.headers().get("content-type").unwrap().as_bytes();
+        let multiplexed: bool;
+        if content_type == b"application/vnd.docker.multiplexed-stream" {
+            multiplexed = true;
+        } else if content_type == b"application/vnd.docker.raw-stream" {
+            multiplexed = false;
+        } else {
+            panic!("Unrecognized content-type from attach: {}", String::from_utf8(content_type.to_vec()).unwrap());
+        }
+        let upgraded = hyper::upgrade::on(response).await.unwrap();
+        if multiplexed {
+            handle_multiplexed_stream(upgraded).await;
+        } else {
+            handle_raw_stream(upgraded).await;
+        }
     } else {
         panic!("{}", parse_error_response(response, "Unable to attach").await.unwrap_err());
     }
 }
 
-async fn handle_stream(response: &mut Response<Body>) {
-    while let Some(next) = response.data().await {
-        let chunk = next.expect("Error reading from container");
-        io::stdout().write_all(&chunk).expect("Error writing to stdout");
-        io::stdout().flush().expect("Error flushing stdout");
+async fn handle_multiplexed_stream(upgraded: Upgraded) {
+    // TODO handle multiplexed stream
+    let (read, mut write) = split(upgraded);
+    let mut read = FramedRead::new(read, BytesCodec::new());
+
+    let mut stdout = io::stdout();
+
+    while let Some(Ok(data)) = read.next().await {
+        stdout.write_all(&*data).expect("Error writing to stdout");
+        stdout.flush().expect("Error flushing stdout");
+    }
+}
+
+async fn handle_raw_stream(upgraded: Upgraded) {
+    let (read, mut write) = split(upgraded);
+    let mut read = FramedRead::new(read, BytesCodec::new());
+
+    spawn(async move {
+        let mut stdin = async_stdin().bytes();
+        loop {
+            if let Some(Ok(byte)) = stdin.next() {
+                write.write(&[byte]).await.ok();
+            } else {
+                sleep(Duration::from_nanos(10)).await;
+            }
+        }
+    });
+
+    let stdout = io::stdout();
+    let mut stdout = stdout.into_raw_mode().expect("Cannot set stdout into raw mode"); // set stdout in raw mode so we can do TTY
+
+    while let Some(Ok(data)) = read.next().await {
+        stdout.write_all(&*data).expect("Error writing to stdout");
+        stdout.flush().expect("Error flushing stdout");
     }
 }
 
 /// Wait for a Docker container.
-pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
-    let (status, maybe_body) = empty_request(runtime, Method::POST, &format!("/containers/{id}/wait"))?;
+pub fn wait_container(id: &str) -> Result<u8, DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/{DOCKER_API_VERSION}/containers/{id}/wait"))?;
     let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
     if status.is_success() {
         let status_code = body["StatusCode"].as_u64().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
@@ -159,7 +213,7 @@ pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
 }
 
 /// Make a request to the Docker daemon without a body.
-fn empty_request(runtime: &Runtime, method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
         .header("Accept", "application/json")
@@ -167,11 +221,11 @@ fn empty_request(runtime: &Runtime, method: Method, url: &str) -> Result<(Status
         .body(Body::empty())
         .expect("failed to build request");
 
-    make_request(runtime, req)
+    make_request(req)
 }
 
 /// Make a request to the Docker daemon with a body.
-fn body_request(runtime: &Runtime, method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
         .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
         .header("Content-Type", "application/json")
@@ -180,12 +234,12 @@ fn body_request(runtime: &Runtime, method: Method, url: &str, body: Value) -> Re
         .body(Body::from(serde_json::to_vec(&body).expect("JSON serialize")))
         .expect("failed to build request");
 
-    make_request(runtime, req)
+    make_request(req)
 }
 
-fn make_request(runtime: &Runtime, req: Request<Body>) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn make_request(req: Request<Body>) -> Result<(StatusCode, Option<Value>), DockerError> {
     let client = Client::unix();
-    let response = runtime.block_on(
+    let response = block_on(
         client.request(req)
             .and_then(|response| {
                 let status_code = response.status();

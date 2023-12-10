@@ -27,7 +27,8 @@ struct Cli {
     writable: bool
 }
 
-fn main() -> Result<ExitCode, anyhow::Error> {
+#[tokio::main]
+async fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
     let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.current_dir, args.writable)?;
     Ok(ExitCode::from(status_code))
