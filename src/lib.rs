@@ -8,6 +8,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 use anyhow::{anyhow, Context};
+use futures::executor::block_on;
 use users::{get_effective_uid, get_effective_gid};
 use crate::docker_client::{attach_container, create_container, start_container, wait_container, Bind, Tmpfs};
 
@@ -45,10 +46,10 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         working_dir)
         .context("Unable to create container")?;
     start_container(&id).context("Unable to start container")?;
-    /* let attach_handle = */ attach_container(&id);
+    let attach_handle = attach_container(&id);
     let status_code = wait_container(&id).context("Unable to start container")?;
     sleep(Duration::from_millis(100));
-    // runtime.block_on(attach_handle)?;
+    block_on(attach_handle)?;
     Ok((id, status_code))
 }
 
