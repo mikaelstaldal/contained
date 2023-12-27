@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 
+use atoi::atoi;
 use http::{header, Method, Request, StatusCode};
 use httparse::Status::{Complete, Partial};
 use serde_json::json;
@@ -222,15 +223,11 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
                     .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_TYPE.as_str()))
                     .map(|h| h.value)
                     .unwrap_or(&[]);
-                let content_length_str = std::str::from_utf8(response.headers.into_iter()
+                let content_length = match response.headers.into_iter()
                     .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_LENGTH.as_str()))
-                    .map(|h| h.value)
-                    .unwrap_or(&[]))
-                    .map_err(|_| HttpError(httparse::Error::HeaderValue))?;
-                let content_length = if content_length_str.len() > 0 {
-                    content_length_str.parse::<usize>().map_err(|_| HttpError(httparse::Error::HeaderValue))?
-                } else {
-                    0
+                    .map(|h| h.value) {
+                    Some(v) => atoi::<usize>(v).ok_or(HttpError(httparse::Error::HeaderValue))?,
+                    None => 0
                 };
 
                 return if content_length > 0 {
@@ -253,8 +250,8 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
                     }
                 } else {
                     Ok((status_code, None))
-                }
-            },
+                };
+            }
             Partial => {}
         };
     };
