@@ -8,14 +8,12 @@ license = "Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serde = "1.0.159"
-serde_derive = "1.0.159"
-serde_json = "1.0.95"
-hyper = "0.14.25"
-hyperlocal = "0.8.0"
-futures = "0.3.28"
-tokio = { version = "1.27.0", features = ["full"] }
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
 thiserror = "1.0"
 anyhow = "1.0"
-clap = { version = "4.2", features = ["derive"] }
-users = "0.11.0"
+clap = { version = "4.4", features = ["derive"] }
+users = "0.11"
+http = "1.0"
+httparse = "1.8"

@@ -3,23 +3,25 @@
 //! `docker_client` contains functions to call the Docker daemon.
 
 use std::collections::HashMap;
-use std::io::{self, Write};
-use futures::{FutureExt, TryFutureExt};
-use hyper::{Body, Client, Method, Request, Response, StatusCode};
-use hyper::body::HttpBody;
-use hyperlocal::{UnixClientExt, Uri};
+use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
+
+use http::{header, Method, Request, StatusCode};
+use httparse::Status::{Complete, Partial};
 use serde_json::json;
 use serde_json::Value;
-use tokio::runtime::Runtime;
-use crate::docker_client::DockerError::InvalidJson;
-use DockerError::{ErrorResponse, InvalidResponse};
+
+use crate::docker_client::DockerError::{ErrorResponse, HttpError, InvalidJson, InvalidResponse};
 
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
+const APPLICATION_JSON: &str = "application/json";
 
 #[derive(thiserror::Error, Debug)]
 pub enum DockerError {
     #[error("Network error")]
-    NetworkError(#[from] hyper::Error),
+    NetworkError(#[from] io::Error),
+    #[error("HTTP error")]
+    HttpError(#[from] httparse::Error),
     #[error("Error from docker daemon: [{0}] {1}")]
     ErrorResponse(u16, String),
     #[error("Invalid response from Docker daemon: [{0}] {1}")]
@@ -59,8 +61,7 @@ impl<'a> Tmpfs<'a> {
 }
 
 /// Creates a Docker container.
-pub fn create_container(runtime: &Runtime,
-                        program: &str,
+pub fn create_container(program: &str,
                         arguments: &[String],
                         network: &str,
                         user: &str,
@@ -70,7 +71,7 @@ pub fn create_container(runtime: &Runtime,
                         working_dir: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
-    let (status, maybe_body) = body_request(runtime, Method::POST, "/containers/create",
+    let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
@@ -95,39 +96,42 @@ pub fn create_container(runtime: &Runtime,
                                                     .collect::<HashMap<String, String>>(),
                                   },
                               }))?;
-    let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
-    if status == StatusCode::CREATED {
-        let id = body["Id"].as_str().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
-        Ok(id.to_string())
-    } else {
-        Err(make_error_response(status, body, "Container creation failed"))
+    match maybe_body {
+        Some(body) if status == StatusCode::CREATED => {
+            let id = body["Id"].as_str().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
+            Ok(id.to_string())
+        }
+        Some(body) => Err(make_error_response(status, body, "Container creation failed")),
+        _ => Err(InvalidResponse(status.as_u16(), "".to_string()))
     }
 }
 
 /// Starts a Docker container.
-pub fn start_container(runtime: &Runtime, id: &str) -> Result<(), DockerError> {
-    let (status, maybe_body) = empty_request(runtime, Method::POST, &format!("/containers/{id}/start"))?;
+pub fn start_container(id: &str) -> Result<(), DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/start"))?;
     if status.is_success() {
         Ok(())
     } else {
-        let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
-        Err(make_error_response(status, body, "Container start failed"))
+        match maybe_body {
+            Some(body) => Err(make_error_response(status, body, "Container start failed")),
+            _ => Err(InvalidResponse(status.as_u16(), "".to_string()))
+        }
     }
 }
-
+/*
 /// Attach to a Docker container and stream the output.
-pub fn attach_container(runtime: &Runtime, id: &str) {
+pub fn attach_container(id: &str) {
     let method = Method::POST;
     let url = &format!("/containers/{id}/attach?logs=true&stream=true&stdout=true&stderr=true");
     let req = Request::builder()
-        .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
+        .uri(url)
         .method(method)
-        .body(Body::empty())
+        .body(())
         .expect("failed to build request");
-    runtime.spawn(streaming_request(req));
+    // spawn(streaming_request(req));
 }
 
-async fn streaming_request(req: Request<Body>) {
+fn streaming_request(req: Request<Body>) {
     let client = Client::unix();
     let mut response = client.request(req).await.expect("Unable to make attach request");
     if response.status().is_success() || response.status().is_informational() {
@@ -137,7 +141,7 @@ async fn streaming_request(req: Request<Body>) {
     }
 }
 
-async fn handle_stream(response: &mut Response<Body>) {
+fn handle_stream(response: &mut Response<Body>) {
     while let Some(next) = response.data().await {
         let chunk = next.expect("Error reading from container");
         io::stdout().write_all(&chunk).expect("Error writing to stdout");
@@ -146,8 +150,8 @@ async fn handle_stream(response: &mut Response<Body>) {
 }
 
 /// Wait for a Docker container.
-pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
-    let (status, maybe_body) = empty_request(runtime, Method::POST, &format!("/containers/{id}/wait"))?;
+pub fn wait_container(id: &str) -> Result<u8, DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/wait"))?;
     let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
     if status.is_success() {
         let status_code = body["StatusCode"].as_u64().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
@@ -157,62 +161,107 @@ pub fn wait_container(runtime: &Runtime, id: &str) -> Result<u8, DockerError> {
     }
 }
 
+*/
+
 /// Make a request to the Docker daemon without a body.
-fn empty_request(runtime: &Runtime, method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
     let req = Request::builder()
-        .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
-        .header("Accept", "application/json")
         .method(method)
-        .body(Body::empty())
+        .uri(url)
+        .header(header::HOST, "localhost")
+        .header(header::ACCEPT, APPLICATION_JSON)
+        .body(Vec::new())
         .expect("failed to build request");
 
-    make_request(runtime, req)
+    make_request(req)
 }
 
 /// Make a request to the Docker daemon with a body.
-fn body_request(runtime: &Runtime, method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, Option<Value>), DockerError> {
+    let raw_body = serde_json::to_vec(&body).expect("JSON serialize");
     let req = Request::builder()
-        .uri::<Uri>(Uri::new(DOCKER_SOCK, url))
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
         .method(method)
-        .body(Body::from(serde_json::to_vec(&body).expect("JSON serialize")))
+        .uri(url)
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, APPLICATION_JSON)
+        .header(header::CONTENT_LENGTH, raw_body.len().to_string())
+        .header(header::ACCEPT, APPLICATION_JSON)
+        .body(raw_body)
         .expect("failed to build request");
 
-    make_request(runtime, req)
+    make_request(req)
 }
 
-fn make_request(runtime: &Runtime, req: Request<Body>) -> Result<(StatusCode, Option<Value>), DockerError> {
-    let client = Client::unix();
-    let response = runtime.block_on(
-        client.request(req)
-            .and_then(|response| {
-                let status_code = response.status();
-                hyper::body::to_bytes(response.into_body())
-                    .map(move |body| {
-                        let body = body?.to_vec();
-                        Ok((status_code, body))
-                    })
-            }
-            ));
+fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), DockerError> {
+    let mut stream = UnixStream::connect(DOCKER_SOCK)?;
 
-    match response {
-        Ok((status_code, body)) => {
-            let raw_body: &[u8] = &body.to_vec();
-            let json = if raw_body.len() > 0 {
-                Some(serde_json::from_slice(raw_body).map_err(|err|
-                    InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
-                )?)
-            } else {
-                None
-            };
-            Ok((status_code, json))
-        }
-        Err(e) => Err(e.into())
+    stream.write_all(&*format!("{} {} HTTP/1.1\r\n", req.method().as_str(), req.uri().to_string()).into_bytes())?;
+    for (name, value) in req.headers() {
+        stream.write_all(name.as_str().as_bytes())?;
+        stream.write_all(": ".as_bytes())?;
+        stream.write_all(value.as_bytes())?;
+        stream.write_all("\r\n".as_bytes())?;
     }
+    stream.write_all("\r\n".as_bytes())?;
+    if req.body().len() > 0 {
+        stream.write_all(req.body())?;
+    }
+    stream.flush()?;
+
+    let mut buffer = [0; 1024];
+    let mut bytes_read: usize = 0;
+    loop {
+        bytes_read += stream.read(&mut buffer[bytes_read..])?;
+        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut response = httparse::Response::new(&mut headers);
+        match response.parse(&buffer)? {
+            Complete(header_size) => {
+                let status_code: StatusCode = StatusCode::from_u16(response.code.ok_or(HttpError(httparse::Error::Status))?)
+                    .map_err(|_| HttpError(httparse::Error::Status))?;
+                let content_type = response.headers.into_iter()
+                    .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_TYPE.as_str()))
+                    .map(|h| h.value)
+                    .unwrap_or(&[]);
+                let content_length_str = std::str::from_utf8(response.headers.into_iter()
+                    .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_LENGTH.as_str()))
+                    .map(|h| h.value)
+                    .unwrap_or(&[]))
+                    .map_err(|_| HttpError(httparse::Error::HeaderValue))?;
+                let content_length = if content_length_str.len() > 0 {
+                    content_length_str.parse::<usize>().map_err(|_| HttpError(httparse::Error::HeaderValue))?
+                } else {
+                    0
+                };
+
+                return if content_length > 0 {
+                    let body = if content_length > (bytes_read - header_size) {
+                        let mut body_buffer = Vec::from(&buffer[header_size..bytes_read]);
+                        body_buffer.resize(content_length, 0);
+                        stream.read_exact(&mut body_buffer[(bytes_read - header_size)..])?;
+                        body_buffer
+                    } else {
+                        (&buffer[header_size..(header_size + content_length)]).to_vec()
+                    };
+
+                    if content_type.eq_ignore_ascii_case(APPLICATION_JSON.as_bytes()) {
+                        let json = Some(serde_json::from_slice(&*body).map_err(|err|
+                            InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
+                        )?);
+                        Ok((status_code, json))
+                    } else {
+                        Err(InvalidResponse(status_code.as_u16(), String::from_utf8(body).unwrap_or(String::from(""))))
+                    }
+                } else {
+                    Ok((status_code, None))
+                }
+            },
+            Partial => {}
+        };
+    };
 }
 
-async fn parse_error_response(response: Response<Body>, fallback_error_message: &str) -> Result<(), DockerError> {
+/*
+fn parse_error_response(response: Response<Body>, fallback_error_message: &str) -> Result<(), DockerError> {
     let status = response.status();
     let body = hyper::body::to_bytes(response.into_body()).await?;
     let raw_body = body.to_vec();
@@ -221,6 +270,7 @@ async fn parse_error_response(response: Response<Body>, fallback_error_message: 
     )?;
     Err(make_error_response(status, json, fallback_error_message))
 }
+ */
 
 fn make_error_response(status: StatusCode, body: Value, fallback_error_message: &str) -> DockerError {
     ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or(fallback_error_message).to_string())
