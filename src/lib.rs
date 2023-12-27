@@ -2,14 +2,15 @@
 //!
 //! Run a program in a Docker container.
 
+use std::{fs, thread};
 use std::env::current_dir;
-use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
 
 use anyhow::{anyhow, Context};
 use users::{get_effective_gid, get_effective_uid};
 
-use crate::docker_client::{Bind, create_container, start_container, Tmpfs};
+use crate::docker_client::{attach_container, Bind, create_container, start_container, Tmpfs, wait_container};
 
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
@@ -44,10 +45,18 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         true,
         working_dir)
         .context("Unable to create container")?;
+
+    attach_container(&id).context("Unable to attach container")?;
+
+    let id_copy = id.clone();
+    let (tx, wait_rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(wait_container(&id_copy)).expect("Unable to send wait result");
+    });
+
     start_container(&id).context("Unable to start container")?;
-    // TODO attach_container(&id);
-    let status_code = 0; // TODO wait_container(&id).context("Unable to wait for container")?;
-    Ok((id, status_code))
+
+    wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id, status_code))
 }
 
 mod docker_client;

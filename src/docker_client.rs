@@ -3,19 +3,23 @@
 //! `docker_client` contains functions to call the Docker daemon.
 
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::{panic, thread};
 
-use atoi::atoi;
-use http::{header, Method, Request, StatusCode};
-use httparse::Status::{Complete, Partial};
+use atoi::{FromRadix10Checked, FromRadix16Checked};
+use http::{header, HeaderName, Method, Request, StatusCode};
+use httparse::Response;
+use httparse::Status::Complete;
 use serde_json::json;
 use serde_json::Value;
+use termion::raw::IntoRawMode;
 
 use crate::docker_client::DockerError::{ErrorResponse, HttpError, InvalidJson, InvalidResponse};
 
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
 const APPLICATION_JSON: &str = "application/json";
+const BUFFER_SIZE: usize = 1024;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DockerError {
@@ -72,14 +76,16 @@ pub fn create_container(program: &str,
                         working_dir: &str) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
+    let is_a_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
                                   "Entrypoint": entrypoint,
                                   "User": user,
+                                  "AttachStdin": true,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
-                                  "Tty": true,
+                                  "Tty": is_a_tty,
                                   "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
@@ -107,6 +113,19 @@ pub fn create_container(program: &str,
     }
 }
 
+/// Waits for a Docker container to exit, and return the exit code.
+pub fn wait_container(id: &str) -> Result<u8, DockerError> {
+    let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/wait?condition=next-exit"))?;
+    match maybe_body {
+        Some(body) if status.is_success() => {
+            let status_code = body["StatusCode"].as_u64().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
+            Ok(status_code.try_into().map_err(|_| InvalidResponse(status.as_u16(), format!("container status code >255: {}", status_code)))?)
+        }
+        Some(body) => Err(make_error_response(status, body, "Container wait failed")),
+        _ => Err(InvalidResponse(status.as_u16(), "".to_string()))
+    }
+}
+
 /// Starts a Docker container.
 pub fn start_container(id: &str) -> Result<(), DockerError> {
     let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/start"))?;
@@ -119,50 +138,102 @@ pub fn start_container(id: &str) -> Result<(), DockerError> {
         }
     }
 }
-/*
+
 /// Attach to a Docker container and stream the output.
-pub fn attach_container(id: &str) {
-    let method = Method::POST;
-    let url = &format!("/containers/{id}/attach?logs=true&stream=true&stdout=true&stderr=true");
+pub fn attach_container(id: &str) -> Result<(), DockerError> {
     let req = Request::builder()
-        .uri(url)
-        .method(method)
-        .body(())
+        .method(Method::POST)
+        .uri(&format!("/containers/{id}/attach?stream=true&stdin=true&stdout=true&stderr=true"))
+        .header(header::HOST, "localhost")
+        .header(header::UPGRADE, "tcp")
+        .header(header::CONNECTION, "Upgrade")
+        .body(Vec::new())
         .expect("failed to build request");
-    // spawn(streaming_request(req));
+
+    let mut stream = UnixStream::connect(DOCKER_SOCK)?;
+
+    send_request(req, &mut stream)?;
+    let (buffer, bytes_read, header_size, stream, is_multiplexed) = read_response(stream)?;
+
+    thread::spawn(move || {
+        handle_stream(buffer, bytes_read, header_size, stream, is_multiplexed).unwrap();
+    });
+
+    Ok(())
 }
 
-fn streaming_request(req: Request<Body>) {
-    let client = Client::unix();
-    let mut response = client.request(req).await.expect("Unable to make attach request");
-    if response.status().is_success() || response.status().is_informational() {
-        handle_stream(&mut response).await;
+fn read_response(mut stream: UnixStream) -> Result<([u8; 1024], usize, usize, UnixStream, bool), DockerError> {
+    let mut buffer = [0; BUFFER_SIZE];
+    let mut bytes_read: usize = 0;
+    loop {
+        bytes_read += stream.read(&mut buffer[bytes_read..])?;
+        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut response = Response::new(&mut headers);
+        if let Complete(header_size) = response.parse(&buffer)? {
+            let status_code: StatusCode = StatusCode::from_u16(response.code.ok_or(HttpError(httparse::Error::Status))?)
+                .map_err(|_| HttpError(httparse::Error::Status))?;
+            if !status_code.is_informational() {
+                return Err(InvalidResponse(status_code.as_u16(), response.reason.map_or("".to_string(), |s| s.to_string())));
+            }
+
+            let content_type = get_header_value(&mut response, header::CONTENT_TYPE).unwrap_or(&[]).to_vec();
+            let is_multiplexed = if content_type == b"application/vnd.docker.multiplexed-stream" {
+                true
+            } else if content_type == b"application/vnd.docker.raw-stream" {
+                false
+            } else {
+                return Err(InvalidResponse(status_code.as_u16(),
+                                    format!("Unrecognized content-type from attach: {}",
+                                            String::from_utf8(content_type).expect("UTF-8"))))
+            };
+            return Ok((buffer, bytes_read, header_size, stream, is_multiplexed))
+        }
+    };
+}
+
+fn handle_stream(mut buffer: [u8; 1024], mut bytes_read: usize, header_size: usize, mut stream: UnixStream, is_multiplexed: bool) -> Result<(), DockerError> {
+    if is_multiplexed {
+        handle_multiplexed_stream(buffer, header_size, bytes_read, stream)
     } else {
-        panic!("{}", parse_error_response(response, "Unable to attach").await.unwrap_err());
+        handle_raw_stream(buffer, header_size, bytes_read, stream)
     }
 }
 
-fn handle_stream(response: &mut Response<Body>) {
-    while let Some(next) = response.data().await {
-        let chunk = next.expect("Error reading from container");
-        io::stdout().write_all(&chunk).expect("Error writing to stdout");
-        io::stdout().flush().expect("Error flushing stdout");
-    }
+fn handle_multiplexed_stream(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, mut stream: UnixStream) -> Result<(), DockerError> {
+    eprintln!("handle_multiplexed_stream");
+    // TODO handle multiplexed stream
+    Ok(())
 }
 
-/// Wait for a Docker container.
-pub fn wait_container(id: &str) -> Result<u8, DockerError> {
-    let (status, maybe_body) = empty_request(Method::POST, &format!("/containers/{id}/wait"))?;
-    let body = maybe_body.ok_or(InvalidResponse(status.as_u16(), "".to_string()))?;
-    if status.is_success() {
-        let status_code = body["StatusCode"].as_u64().ok_or(InvalidResponse(status.as_u16(), body.to_string()))?;
-        Ok(status_code.try_into().expect(&format!("container status code >255: {}", status_code)))
-    } else {
-        Err(make_error_response(status, body, "Container wait failed"))
+fn handle_raw_stream(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, mut stream: UnixStream) -> Result<(), DockerError> {
+    /* TODO read from stdin
+    spawn(async move {
+        let mut stdin = async_stdin().bytes();
+        loop {
+            if let Some(Ok(byte)) = stdin.next() {
+                write.write(&[byte]).await.ok();
+            } else {
+                sleep(Duration::from_nanos(10)).await;
+            }
+        }
+    });
+     */
+
+    let stdout = io::stdout();
+    let mut stdout = stdout.into_raw_mode().expect("Cannot set stdout into raw mode"); // set stdout in raw mode so we can do TTY
+         
+    stdout.write_all(&buffer[header_size..bytes_read])?;
+    stdout.flush()?;
+    let mut bytes_read: usize;
+    loop {
+        bytes_read = stream.read(&mut buffer)?;
+        if bytes_read < 1 {
+            return Ok(());
+        }
+        stdout.write_all(&buffer[..bytes_read])?;
+        stdout.flush()?;
     }
 }
-
-*/
 
 /// Make a request to the Docker daemon without a body.
 fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>), DockerError> {
@@ -196,6 +267,66 @@ fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, O
 fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), DockerError> {
     let mut stream = UnixStream::connect(DOCKER_SOCK)?;
 
+    send_request(req, &mut stream)?;
+
+    let mut buffer = [0; 1024];
+    let mut bytes_read: usize = 0;
+    loop {
+        bytes_read += stream.read(&mut buffer[bytes_read..])?;
+        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut response = Response::new(&mut headers);
+        if let Complete(header_size) = response.parse(&buffer)? {
+            let status_code: StatusCode = StatusCode::from_u16(response.code.ok_or(HttpError(httparse::Error::Status))?)
+                .map_err(|_| HttpError(httparse::Error::Status))?;
+            let content_type = get_header_value(&mut response, header::CONTENT_TYPE).unwrap_or(&[]).to_vec();
+            let transfer_encoding = get_header_value(&mut response, header::TRANSFER_ENCODING).unwrap_or(&[]);
+            let content_length = match get_header_value(&mut response, header::CONTENT_LENGTH) {
+                Some(v) => usize::from_radix_10_checked(v).0.ok_or(HttpError(httparse::Error::HeaderValue))?,
+                None => 0
+            };
+
+            let body = if content_length > 0 {
+                if content_length > (bytes_read - header_size) {
+                    let mut body_buffer = Vec::from(&buffer[header_size..bytes_read]);
+                    body_buffer.resize(content_length, 0);
+                    stream.read_exact(&mut body_buffer[(bytes_read - header_size)..])?;
+                    body_buffer
+                } else {
+                    (&buffer[header_size..(header_size + content_length)]).to_vec()
+                }
+            } else if transfer_encoding.eq_ignore_ascii_case("chunked".as_bytes()) {
+                let chunk_bytes_read = stream.read(&mut buffer[bytes_read..])?;
+
+                let mut chunk_size_end: usize = header_size;
+                loop {
+                    if buffer[chunk_size_end] == b'\r' || chunk_size_end > (bytes_read + chunk_bytes_read) {
+                        break;
+                    }
+                    chunk_size_end += 1;
+                }
+                let chunk_size = usize::from_radix_16_checked(&buffer[header_size..chunk_size_end]).0.ok_or(HttpError(httparse::Error::Token))?;
+                (&buffer[(chunk_size_end + 2)..(chunk_size_end + 2 + chunk_size)]).to_vec()
+            } else {
+                Vec::new()
+            };
+
+            return if !body.is_empty() {
+                if content_type.eq_ignore_ascii_case(APPLICATION_JSON.as_bytes()) {
+                    let json = Some(serde_json::from_slice(&*body).map_err(|err|
+                        InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
+                    )?);
+                    Ok((status_code, json))
+                } else {
+                    Err(InvalidResponse(status_code.as_u16(), String::from_utf8(body).unwrap_or(String::from(""))))
+                }
+            } else {
+                Ok((status_code, None))
+            };
+        }
+    };
+}
+
+fn send_request(req: Request<Vec<u8>>, stream: &mut UnixStream) -> Result<(), DockerError> {
     stream.write_all(&*format!("{} {} HTTP/1.1\r\n", req.method().as_str(), req.uri().to_string()).into_bytes())?;
     for (name, value) in req.headers() {
         stream.write_all(name.as_str().as_bytes())?;
@@ -208,66 +339,14 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
         stream.write_all(req.body())?;
     }
     stream.flush()?;
-
-    let mut buffer = [0; 1024];
-    let mut bytes_read: usize = 0;
-    loop {
-        bytes_read += stream.read(&mut buffer[bytes_read..])?;
-        let mut headers = [httparse::EMPTY_HEADER; 16];
-        let mut response = httparse::Response::new(&mut headers);
-        match response.parse(&buffer)? {
-            Complete(header_size) => {
-                let status_code: StatusCode = StatusCode::from_u16(response.code.ok_or(HttpError(httparse::Error::Status))?)
-                    .map_err(|_| HttpError(httparse::Error::Status))?;
-                let content_type = response.headers.into_iter()
-                    .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_TYPE.as_str()))
-                    .map(|h| h.value)
-                    .unwrap_or(&[]);
-                let content_length = match response.headers.into_iter()
-                    .find(|h| h.name.eq_ignore_ascii_case(header::CONTENT_LENGTH.as_str()))
-                    .map(|h| h.value) {
-                    Some(v) => atoi::<usize>(v).ok_or(HttpError(httparse::Error::HeaderValue))?,
-                    None => 0
-                };
-
-                return if content_length > 0 {
-                    let body = if content_length > (bytes_read - header_size) {
-                        let mut body_buffer = Vec::from(&buffer[header_size..bytes_read]);
-                        body_buffer.resize(content_length, 0);
-                        stream.read_exact(&mut body_buffer[(bytes_read - header_size)..])?;
-                        body_buffer
-                    } else {
-                        (&buffer[header_size..(header_size + content_length)]).to_vec()
-                    };
-
-                    if content_type.eq_ignore_ascii_case(APPLICATION_JSON.as_bytes()) {
-                        let json = Some(serde_json::from_slice(&*body).map_err(|err|
-                            InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
-                        )?);
-                        Ok((status_code, json))
-                    } else {
-                        Err(InvalidResponse(status_code.as_u16(), String::from_utf8(body).unwrap_or(String::from(""))))
-                    }
-                } else {
-                    Ok((status_code, None))
-                };
-            }
-            Partial => {}
-        };
-    };
+    Ok(())
 }
 
-/*
-fn parse_error_response(response: Response<Body>, fallback_error_message: &str) -> Result<(), DockerError> {
-    let status = response.status();
-    let body = hyper::body::to_bytes(response.into_body()).await?;
-    let raw_body = body.to_vec();
-    let json = serde_json::from_slice(&raw_body).map_err(|err|
-        InvalidJson(status.into(), String::from_utf8(raw_body).unwrap_or(String::from("")), err)
-    )?;
-    Err(make_error_response(status, json, fallback_error_message))
+fn get_header_value<'headers, 'buf>(response: &mut Response<'headers, 'buf>, header_name: HeaderName) -> Option<&'headers [u8]> {
+    response.headers.into_iter()
+        .find(|h| h.name.eq_ignore_ascii_case(header_name.as_str()))
+        .map(|h| h.value)
 }
- */
 
 fn make_error_response(status: StatusCode, body: Value, fallback_error_message: &str) -> DockerError {
     ErrorResponse(status.as_u16(), body["message"].as_str().unwrap_or(fallback_error_message).to_string())
