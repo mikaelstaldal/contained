@@ -2,12 +2,14 @@
 //!
 //! Run a program in a Docker container.
 
-use std::{fs, thread};
+use std::{fs, io, thread};
 use std::env::current_dir;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::mpsc;
 
 use anyhow::{anyhow, Context};
+use termion::raw::IntoRawMode;
 use users::{get_effective_gid, get_effective_uid};
 
 use crate::docker_client::{attach_container, Bind, create_container, start_container, Tmpfs, wait_container};
@@ -35,6 +37,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
             binds.push(Bind::new(path, path, &["ro"]));
         }
     }
+    let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let id = create_container(
         program.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?,
         arguments,
@@ -43,8 +46,13 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         &binds,
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,
-        working_dir)
+        working_dir,
+        is_tty)
         .context("Unable to create container")?;
+
+    //   if is_tty {
+    let stdout = io::stdout().into_raw_mode()?; // set stdout in raw mode so we can do TTY
+//    }
 
     attach_container(&id).context("Unable to attach container")?;
 
@@ -56,7 +64,12 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
 
     start_container(&id).context("Unable to start container")?;
 
-    wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id, status_code))
+    let result = wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id, status_code));
+
+    // TODO restore terminal size
+    drop(stdout); // restore terminal mode
+
+    result
 }
 
 mod docker_client;

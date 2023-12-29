@@ -3,9 +3,9 @@
 //! `docker_client` contains functions to call the Docker daemon.
 
 use std::collections::HashMap;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::{panic, thread};
+use std::thread;
 
 use atoi::{FromRadix10Checked, FromRadix16Checked};
 use http::{header, HeaderName, Method, Request, StatusCode};
@@ -13,7 +13,6 @@ use httparse::Response;
 use httparse::Status::Complete;
 use serde_json::json;
 use serde_json::Value;
-use termion::raw::IntoRawMode;
 
 use crate::docker_client::DockerError::{ErrorResponse, HttpError, InvalidJson, InvalidResponse};
 
@@ -73,10 +72,10 @@ pub fn create_container(program: &str,
                         binds: &[Bind],
                         tmpfs: &[Tmpfs],
                         readonly_rootfs: bool,
-                        working_dir: &str) -> Result<String, DockerError> {
+                        working_dir: &str,
+                        is_tty: bool) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
-    let is_a_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
@@ -85,7 +84,8 @@ pub fn create_container(program: &str,
                                   "AttachStdin": true,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
-                                  "Tty": is_a_tty,
+                                  "OpenStdin": true,
+                                  "Tty": is_tty,
                                   "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
@@ -155,9 +155,11 @@ pub fn attach_container(id: &str) -> Result<(), DockerError> {
     send_request(req, &mut stream)?;
     let (buffer, bytes_read, header_size, stream, is_multiplexed) = read_response(stream)?;
 
-    thread::spawn(move || {
-        handle_stream(buffer, bytes_read, header_size, stream, is_multiplexed).unwrap();
-    });
+    let write_stream = stream.try_clone()?;
+
+    // TODO handle multiplexed
+
+    handle_raw(buffer, bytes_read, header_size, stream, write_stream)?;
 
     Ok(())
 }
@@ -183,47 +185,32 @@ fn read_response(mut stream: UnixStream) -> Result<([u8; 1024], usize, usize, Un
                 false
             } else {
                 return Err(InvalidResponse(status_code.as_u16(),
-                                    format!("Unrecognized content-type from attach: {}",
-                                            String::from_utf8(content_type).expect("UTF-8"))))
+                                           format!("Unrecognized content-type from attach: {}",
+                                                   String::from_utf8(content_type).expect("UTF-8"))));
             };
-            return Ok((buffer, bytes_read, header_size, stream, is_multiplexed))
+            return Ok((buffer, bytes_read, header_size, stream, is_multiplexed));
         }
     };
 }
 
-fn handle_stream(mut buffer: [u8; 1024], mut bytes_read: usize, header_size: usize, mut stream: UnixStream, is_multiplexed: bool) -> Result<(), DockerError> {
-    if is_multiplexed {
-        handle_multiplexed_stream(buffer, header_size, bytes_read, stream)
-    } else {
-        handle_raw_stream(buffer, header_size, bytes_read, stream)
-    }
-}
+fn handle_raw(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
+    thread::spawn(move || {
+        read_raw_data(buffer, header_size, bytes_read, stream).unwrap();
+    });
 
-fn handle_multiplexed_stream(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, mut stream: UnixStream) -> Result<(), DockerError> {
-    eprintln!("handle_multiplexed_stream");
-    // TODO handle multiplexed stream
+    thread::spawn(move || {
+        write_raw_data(write_stream).unwrap();
+    });
+
     Ok(())
 }
 
-fn handle_raw_stream(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, mut stream: UnixStream) -> Result<(), DockerError> {
-    /* TODO read from stdin
-    spawn(async move {
-        let mut stdin = async_stdin().bytes();
-        loop {
-            if let Some(Ok(byte)) = stdin.next() {
-                write.write(&[byte]).await.ok();
-            } else {
-                sleep(Duration::from_nanos(10)).await;
-            }
-        }
-    });
-     */
+fn read_raw_data(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, mut stream: UnixStream) -> Result<(), DockerError> {
+    let mut stdout = io::stdout();
 
-    let stdout = io::stdout();
-    let mut stdout = stdout.into_raw_mode().expect("Cannot set stdout into raw mode"); // set stdout in raw mode so we can do TTY
-         
     stdout.write_all(&buffer[header_size..bytes_read])?;
     stdout.flush()?;
+
     let mut bytes_read: usize;
     loop {
         bytes_read = stream.read(&mut buffer)?;
@@ -232,6 +219,22 @@ fn handle_raw_stream(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_re
         }
         stdout.write_all(&buffer[..bytes_read])?;
         stdout.flush()?;
+    }
+}
+
+fn write_raw_data(mut stream: UnixStream) -> Result<(), DockerError> {
+    let mut stdin = io::stdin();
+
+    let mut buffer = [0; BUFFER_SIZE];
+
+    let mut bytes_read: usize;
+    loop {
+        bytes_read = stdin.read(&mut buffer)?;
+        if bytes_read < 1 {
+            return Ok(());
+        }
+        stream.write_all(&buffer[..bytes_read])?;
+        stream.flush()?;
     }
 }
 
