@@ -64,6 +64,20 @@ impl<'a> Tmpfs<'a> {
     }
 }
 
+pub struct Tty {
+    height: u16,
+    width: u16
+}
+
+impl Tty {
+    pub fn new(height: u16, width: u16) -> Self {
+        Self {
+            height,
+            width,
+        }
+    }
+}
+
 /// Creates a Docker container.
 pub fn create_container(program: &str,
                         arguments: &[String],
@@ -73,7 +87,7 @@ pub fn create_container(program: &str,
                         tmpfs: &[Tmpfs],
                         readonly_rootfs: bool,
                         working_dir: &str,
-                        is_tty: bool) -> Result<String, DockerError> {
+                        tty: Option<Tty>) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
@@ -85,7 +99,7 @@ pub fn create_container(program: &str,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
                                   "OpenStdin": true,
-                                  "Tty": is_tty,
+                                  "Tty": tty.is_some(),
                                   "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
@@ -101,6 +115,7 @@ pub fn create_container(program: &str,
                                       "ReadonlyRootfs": readonly_rootfs,
                                       "Tmpfs": tmpfs.into_iter().map(|tmp| (tmp.container_dest.to_string(), tmp.options.join(",")))
                                                     .collect::<HashMap<String, String>>(),
+                                      "ConsoleSize": tty.map(|t| [t.height, t.width])
                                   },
                               }))?;
     match maybe_body {

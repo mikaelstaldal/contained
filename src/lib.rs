@@ -10,9 +10,10 @@ use std::sync::mpsc;
 
 use anyhow::{anyhow, Context};
 use termion::raw::IntoRawMode;
+use termion::terminal_size;
 use users::{get_effective_gid, get_effective_uid};
 
-use crate::docker_client::{attach_container, Bind, create_container, start_container, Tmpfs, wait_container};
+use crate::docker_client::{attach_container, Bind, create_container, start_container, Tmpfs, Tty, wait_container};
 
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
@@ -38,6 +39,12 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         }
     }
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
+    let tty = if is_tty {
+        let (width, height) = terminal_size()?;
+        Some(Tty::new(height, width))
+    } else {
+        None
+    };
     let id = create_container(
         program.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?,
         arguments,
@@ -47,7 +54,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,
         working_dir,
-        is_tty)
+        tty)
         .context("Unable to create container")?;
 
     //   if is_tty {
@@ -66,7 +73,6 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
 
     let result = wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id, status_code));
 
-    // TODO restore terminal size
     drop(stdout); // restore terminal mode
 
     result
