@@ -194,13 +194,13 @@ fn read_response(mut stream: UnixStream) -> Result<([u8; 1024], usize, usize, Un
 }
 
 fn handle_raw(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
-    thread::spawn(move || {
+    thread::Builder::new().name("read".to_string()).spawn(move || {
         read_raw_data(buffer, header_size, bytes_read, stream).unwrap();
-    });
+    })?;
 
-    thread::spawn(move || {
+    thread::Builder::new().name("write".to_string()).spawn(move || {
         write_raw_data(write_stream).unwrap();
-    });
+    })?;
 
     Ok(())
 }

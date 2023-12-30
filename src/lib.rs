@@ -58,9 +58,9 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
 
     let id_copy = id.clone();
     let (tx, wait_rx) = mpsc::channel();
-    thread::spawn(move || {
+    thread::Builder::new().name("wait".to_string()).spawn(move || {
         tx.send(wait_container(&id_copy)).expect("Unable to send wait result");
-    });
+    })?;
 
     start_container(&id).context("Unable to start container")?;
 
