@@ -4,17 +4,21 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
+use std::io::ErrorKind::UnexpectedEof;
 use std::os::unix::net::UnixStream;
 use std::thread;
 
 use atoi::{FromRadix10Checked, FromRadix16Checked};
+use byteorder::{BigEndian, ByteOrder};
 use http::{header, HeaderName, Method, Request, StatusCode};
 use httparse::Response;
 use httparse::Status::Complete;
 use serde_json::json;
 use serde_json::Value;
 
-use crate::docker_client::DockerError::{ErrorResponse, HttpError, InvalidJson, InvalidResponse};
+use StreamType::{Stderr, Stdin, Stdout};
+
+use crate::docker_client::DockerError::{ErrorResponse, HttpError, InvalidJson, InvalidResponse, InvalidStream, NetworkError};
 
 const DOCKER_SOCK: &str = "/var/run/docker.sock";
 const APPLICATION_JSON: &str = "application/json";
@@ -32,6 +36,8 @@ pub enum DockerError {
     InvalidResponse(u16, String),
     #[error("Invalid JSON response from Docker daemon: [{0}] {1}")]
     InvalidJson(u16, String, #[source] serde_json::Error),
+    #[error("Invalid stream: {0}")]
+    InvalidStream(u8),
 }
 
 pub struct Bind<'a> {
@@ -66,7 +72,7 @@ impl<'a> Tmpfs<'a> {
 
 pub struct Tty {
     height: u16,
-    width: u16
+    width: u16,
 }
 
 impl Tty {
@@ -87,7 +93,7 @@ pub fn create_container(program: &str,
                         tmpfs: &[Tmpfs],
                         readonly_rootfs: bool,
                         working_dir: &str,
-                        tty: Option<Tty>) -> Result<String, DockerError> {
+                        tty: &Option<Tty>) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
@@ -115,7 +121,7 @@ pub fn create_container(program: &str,
                                       "ReadonlyRootfs": readonly_rootfs,
                                       "Tmpfs": tmpfs.into_iter().map(|tmp| (tmp.container_dest.to_string(), tmp.options.join(",")))
                                                     .collect::<HashMap<String, String>>(),
-                                      "ConsoleSize": tty.map(|t| [t.height, t.width])
+                                      "ConsoleSize": tty.as_ref().map(|t| [t.height, t.width])
                                   },
                               }))?;
     match maybe_body {
@@ -172,9 +178,11 @@ pub fn attach_container(id: &str) -> Result<(), DockerError> {
 
     let write_stream = stream.try_clone()?;
 
-    // TODO handle multiplexed
-
-    handle_raw(buffer, bytes_read, header_size, stream, write_stream)?;
+    if is_multiplexed {
+        handle_multiplexed(buffer, bytes_read, header_size, stream, write_stream)?;
+    } else {
+        handle_raw(buffer, bytes_read, header_size, stream, write_stream)?;
+    }
 
     Ok(())
 }
@@ -226,6 +234,7 @@ fn read_raw_data(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: 
     stdout.write_all(&buffer[header_size..bytes_read])?;
     stdout.flush()?;
 
+    // TODO use io::copy() ?
     let mut bytes_read: usize;
     loop {
         bytes_read = stream.read(&mut buffer)?;
@@ -251,6 +260,67 @@ fn write_raw_data(mut stream: UnixStream) -> Result<(), DockerError> {
         stream.write_all(&buffer[..bytes_read])?;
         stream.flush()?;
     }
+}
+
+fn handle_multiplexed(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
+    thread::Builder::new().name("read".to_string()).spawn(move || {
+        read_multiplexed_data(buffer, header_size, bytes_read, stream).unwrap();
+    })?;
+    /* TODO write multiplexed
+    thread::Builder::new().name("write".to_string()).spawn(move || {
+        write_raw_data(write_stream).unwrap();
+    })?;
+    */
+    Ok(())
+}
+
+enum StreamType {
+    Stdin,
+    Stdout,
+    Stderr,
+}
+
+fn read_multiplexed_data(buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: usize, stream: UnixStream) -> Result<(), DockerError> {
+    let mut stdout = io::stdout();
+    let mut stderr = io::stderr();
+
+    let stream = &mut buffer[header_size..bytes_read].chain(stream);
+
+    loop {
+        let mut frame_header = [0; 8];
+        match stream.read_exact(&mut frame_header) {
+            Ok(_) => {}
+            Err(e) if e.kind() == UnexpectedEof => return Ok(()),
+            Err(e) => return Err(NetworkError(e))
+        }
+        // TODO ask about better way to do this
+        let (stream_type, size) = read_frame_header(&frame_header)?;
+        let mut frame = Vec::with_capacity(size as usize);
+        frame.resize(size as usize, 0);
+        stream.read_exact(&mut frame)?;
+
+        match stream_type {
+            Stdin | Stdout => {
+                stdout.write_all(&frame)?;
+                stdout.flush()?;
+            }
+            Stderr => {
+                stderr.write_all(&frame)?;
+                stderr.flush()?;
+            }
+        };
+    }
+}
+
+fn read_frame_header(buffer: &[u8]) -> Result<(StreamType, u32), DockerError> {
+    let stream_type = match buffer[0] {
+        0 => Stdin,
+        1 => Stdout,
+        2 => Stderr,
+        _ => return Err(InvalidStream(buffer[0]))
+    };
+    let size = BigEndian::read_u32(&buffer[4..]);
+    Ok((stream_type, size))
 }
 
 /// Make a request to the Docker daemon without a body.

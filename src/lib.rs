@@ -54,16 +54,23 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,
         working_dir,
-        tty)
+        &tty)
         .context("Unable to create container")?;
 
-    //   if is_tty {
-    let stdout = io::stdout().into_raw_mode()?; // set stdout in raw mode so we can do TTY
-//    }
+    if tty.is_some() {
+        let stdout = io::stdout().into_raw_mode()?; // set stdout in raw mode so we can do TTY
+        let result = run_container(&id);
+        drop(stdout); // restore terminal mode
+        result
+    } else {
+        run_container(&id)
+    }
+}
 
+fn run_container(id: &str) -> Result<(String, u8), anyhow::Error> {
     attach_container(&id).context("Unable to attach container")?;
 
-    let id_copy = id.clone();
+    let id_copy = id.to_string();
     let (tx, wait_rx) = mpsc::channel();
     thread::Builder::new().name("wait".to_string()).spawn(move || {
         tx.send(wait_container(&id_copy)).expect("Unable to send wait result");
@@ -71,11 +78,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
 
     start_container(&id).context("Unable to start container")?;
 
-    let result = wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id, status_code));
-
-    drop(stdout); // restore terminal mode
-
-    result
+    wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id.to_string(), status_code))
 }
 
 mod docker_client;
