@@ -220,11 +220,9 @@ fn handle_raw(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream:
     thread::Builder::new().name("read".to_string()).spawn(move || {
         read_raw_data(buffer, header_size, bytes_read, stream).unwrap();
     })?;
-
     thread::Builder::new().name("write".to_string()).spawn(move || {
-        write_raw_data(write_stream).unwrap();
+        write_data(write_stream).unwrap();
     })?;
-
     Ok(())
 }
 
@@ -246,11 +244,12 @@ fn read_raw_data(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: 
     }
 }
 
-fn write_raw_data(mut stream: UnixStream) -> Result<(), DockerError> {
+fn write_data(mut stream: UnixStream) -> Result<(), DockerError> {
     let mut stdin = io::stdin();
 
     let mut buffer = [0; BUFFER_SIZE];
 
+    // TODO use io::copy() ?
     let mut bytes_read: usize;
     loop {
         bytes_read = stdin.read(&mut buffer)?;
@@ -266,11 +265,9 @@ fn handle_multiplexed(buffer: [u8; 1024], bytes_read: usize, header_size: usize,
     thread::Builder::new().name("read".to_string()).spawn(move || {
         read_multiplexed_data(buffer, header_size, bytes_read, stream).unwrap();
     })?;
-    /* TODO write multiplexed
     thread::Builder::new().name("write".to_string()).spawn(move || {
-        write_raw_data(write_stream).unwrap();
+        write_data(write_stream).unwrap();
     })?;
-    */
     Ok(())
 }
 
@@ -293,7 +290,6 @@ fn read_multiplexed_data(buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_re
             Err(e) if e.kind() == UnexpectedEof => return Ok(()),
             Err(e) => return Err(NetworkError(e))
         }
-        // TODO ask about better way to do this
         let (stream_type, size) = read_frame_header(&frame_header)?;
         let mut frame = Vec::with_capacity(size as usize);
         frame.resize(size as usize, 0);
