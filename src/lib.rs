@@ -15,6 +15,20 @@ use users::{get_effective_gid, get_effective_uid};
 
 use crate::docker_client::{attach_container, Bind, create_container, remove_container, start_container, Tmpfs, Tty, wait_container};
 
+const ENV: [&str; 11] = [
+    "LANG",
+    "LC_ADDRESS",
+    "LC_NAME",
+    "LC_MONETARY",
+    "LC_PAPER",
+    "LC_IDENTIFICATION",
+    "LC_TELEPHONE",
+    "LC_MEASUREMENT",
+    "LC_TIME",
+    "LC_NUMERIC",
+    "USER"
+];
+
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 
@@ -50,6 +64,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         arguments,
         network,
         &user,
+        &ENV.map(|e| e.to_string()),
         &binds,
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,

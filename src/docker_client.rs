@@ -2,11 +2,11 @@
 //!
 //! `docker_client` contains functions to call the Docker daemon.
 
+use std::{env, thread};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::io::ErrorKind::UnexpectedEof;
 use std::os::unix::net::UnixStream;
-use std::thread;
 
 use atoi::{FromRadix10Checked, FromRadix16Checked};
 use byteorder::{BigEndian, ByteOrder};
@@ -89,6 +89,7 @@ pub fn create_container(program: &str,
                         arguments: &[String],
                         network: &str,
                         user: &str,
+                        environment: &[String],
                         binds: &[Bind],
                         tmpfs: &[Tmpfs],
                         readonly_rootfs: bool,
@@ -96,6 +97,22 @@ pub fn create_container(program: &str,
                         tty: &Option<Tty>) -> Result<String, DockerError> {
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
+
+    let environment = environment.into_iter().flat_map(|key| env::var_os(key).map(|value|
+        format!("{}={}", key, value.to_str().expect("UTF-8")))
+    ).collect::<Vec<String>>();
+    let binds = binds.into_iter().map(|bind| format!("{}:{}{}",
+                                                     bind.host_source,
+                                                     bind.container_dest,
+                                                     if bind.options.len() > 0 {
+                                                         format!(":{}", bind.options.join(","))
+                                                     } else {
+                                                         "".to_string()
+                                                     }))
+        .collect::<Vec<String>>();
+    let tmpfs = tmpfs.into_iter().map(|tmp| (tmp.container_dest.to_string(), tmp.options.join(",")))
+        .collect::<HashMap<String, String>>();
+
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
                                   "Image": "empty",
@@ -105,22 +122,14 @@ pub fn create_container(program: &str,
                                   "AttachStdout": true,
                                   "AttachStderr": true,
                                   "OpenStdin": true,
+                                  "Env": environment,
                                   "Tty": tty.is_some(),
                                   "WorkingDir": working_dir,
                                   "HostConfig": {
                                       "NetworkMode": network,
-                                      "Binds": binds.into_iter().map(|bind| format!("{}:{}{}",
-                                                                 bind.host_source,
-                                                                 bind.container_dest,
-                                                                 if bind.options.len() > 0 {
-                                                                    format!(":{}", bind.options.join(","))
-                                                                 } else {
-                                                                    "".to_string()
-                                                                 }))
-                                                    .collect::<Vec<String>>(),
+                                      "Binds": binds,
                                       "ReadonlyRootfs": readonly_rootfs,
-                                      "Tmpfs": tmpfs.into_iter().map(|tmp| (tmp.container_dest.to_string(), tmp.options.join(",")))
-                                                    .collect::<HashMap<String, String>>(),
+                                      "Tmpfs": tmpfs,
                                       "ConsoleSize": tty.as_ref().map(|t| [t.height, t.width])
                                   },
                               }))?;
