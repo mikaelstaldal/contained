@@ -160,6 +160,19 @@ pub fn start_container(id: &str) -> Result<(), DockerError> {
     }
 }
 
+/// Removes a Docker container.
+pub fn remove_container(id: &str) -> Result<(), DockerError> {
+    let (status, maybe_body) = empty_request(Method::DELETE, &format!("/containers/{id}"))?;
+    if status.is_success() {
+        Ok(())
+    } else {
+        match maybe_body {
+            Some(body) => Err(make_error_response(status, body, "Container remove failed")),
+            _ => Err(InvalidResponse(status.as_u16(), "".to_string()))
+        }
+    }
+}
+
 /// Attach to a Docker container and stream the output.
 pub fn attach_container(id: &str) -> Result<(), DockerError> {
     let req = Request::builder()

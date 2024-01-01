@@ -13,7 +13,7 @@ use termion::raw::IntoRawMode;
 use termion::terminal_size;
 use users::{get_effective_gid, get_effective_uid};
 
-use crate::docker_client::{attach_container, Bind, create_container, start_container, Tmpfs, Tty, wait_container};
+use crate::docker_client::{attach_container, Bind, create_container, remove_container, start_container, Tmpfs, Tty, wait_container};
 
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
@@ -78,7 +78,11 @@ fn run_container(id: &str) -> Result<(String, u8), anyhow::Error> {
 
     start_container(&id).context("Unable to start container")?;
 
-    wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id.to_string(), status_code))
+    let result = wait_rx.recv()?.context("Unable to wait for container").map(|status_code| (id.to_string(), status_code))?;
+
+    remove_container(&id).context("Unable to remove container")?;
+
+    Ok(result)
 }
 
 mod docker_client;
