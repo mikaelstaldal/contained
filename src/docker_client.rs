@@ -187,7 +187,7 @@ pub fn attach_container(id: &str) -> Result<(), DockerError> {
     Ok(())
 }
 
-fn read_response(mut stream: UnixStream) -> Result<([u8; 1024], usize, usize, UnixStream, bool), DockerError> {
+fn read_response(mut stream: UnixStream) -> Result<([u8; BUFFER_SIZE], usize, usize, UnixStream, bool), DockerError> {
     let mut buffer = [0; BUFFER_SIZE];
     let mut bytes_read: usize = 0;
     loop {
@@ -216,7 +216,7 @@ fn read_response(mut stream: UnixStream) -> Result<([u8; 1024], usize, usize, Un
     };
 }
 
-fn handle_raw(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
+fn handle_raw(buffer: [u8; BUFFER_SIZE], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
     thread::Builder::new().name("read".to_string()).spawn(move || {
         read_raw_data(buffer, header_size, bytes_read, stream).unwrap();
     })?;
@@ -232,36 +232,31 @@ fn read_raw_data(mut buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_read: 
     stdout.write_all(&buffer[header_size..bytes_read])?;
     stdout.flush()?;
 
-    // TODO use io::copy() ?
-    let mut bytes_read: usize;
-    loop {
-        bytes_read = stream.read(&mut buffer)?;
-        if bytes_read < 1 {
-            return Ok(());
-        }
-        stdout.write_all(&buffer[..bytes_read])?;
-        stdout.flush()?;
-    }
+    copy_stream(&mut stream, &mut stdout, &mut buffer)
 }
 
 fn write_data(mut stream: UnixStream) -> Result<(), DockerError> {
-    let mut stdin = io::stdin();
-
     let mut buffer = [0; BUFFER_SIZE];
+    copy_stream(&mut io::stdin(), &mut stream, &mut buffer)
+}
 
-    // TODO use io::copy() ?
+fn copy_stream<R, W>(from: &mut R, to: &mut W, buffer: &mut [u8]) -> Result<(), DockerError>
+    where
+        R: Read,
+        W: Write,
+{
     let mut bytes_read: usize;
     loop {
-        bytes_read = stdin.read(&mut buffer)?;
+        bytes_read = from.read(buffer)?;
         if bytes_read < 1 {
             return Ok(());
         }
-        stream.write_all(&buffer[..bytes_read])?;
-        stream.flush()?;
+        to.write_all(&buffer[..bytes_read])?;
+        to.flush()?;
     }
 }
 
-fn handle_multiplexed(buffer: [u8; 1024], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
+fn handle_multiplexed(buffer: [u8; BUFFER_SIZE], bytes_read: usize, header_size: usize, stream: UnixStream, write_stream: UnixStream) -> Result<(), DockerError> {
     thread::Builder::new().name("read".to_string()).spawn(move || {
         read_multiplexed_data(buffer, header_size, bytes_read, stream).unwrap();
     })?;
@@ -352,7 +347,7 @@ fn make_request(req: Request<Option<Vec<u8>>>) -> Result<(StatusCode, Option<Val
 
     send_request(req, &mut stream)?;
 
-    let mut buffer = [0; 1024];
+    let mut buffer = [0; BUFFER_SIZE];
     let mut bytes_read: usize = 0;
     loop {
         bytes_read += stream.read(&mut buffer[bytes_read..])?;
