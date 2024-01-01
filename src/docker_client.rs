@@ -291,8 +291,7 @@ fn read_multiplexed_data(buffer: [u8; BUFFER_SIZE], header_size: usize, bytes_re
             Err(e) => return Err(NetworkError(e))
         }
         let (stream_type, size) = read_frame_header(&frame_header)?;
-        let mut frame = Vec::with_capacity(size as usize);
-        frame.resize(size as usize, 0);
+        let mut frame = vec![0; size as usize];
         stream.read_exact(&mut frame)?;
 
         match stream_type {
