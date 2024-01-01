@@ -168,7 +168,7 @@ pub fn attach_container(id: &str) -> Result<(), DockerError> {
         .header(header::HOST, "localhost")
         .header(header::UPGRADE, "tcp")
         .header(header::CONNECTION, "Upgrade")
-        .body(Vec::new())
+        .body(None)
         .expect("failed to build request");
 
     let mut stream = UnixStream::connect(DOCKER_SOCK)?;
@@ -325,7 +325,7 @@ fn empty_request(method: Method, url: &str) -> Result<(StatusCode, Option<Value>
         .uri(url)
         .header(header::HOST, "localhost")
         .header(header::ACCEPT, APPLICATION_JSON)
-        .body(Vec::new())
+        .body(None)
         .expect("failed to build request");
 
     make_request(req)
@@ -341,13 +341,13 @@ fn body_request(method: Method, url: &str, body: Value) -> Result<(StatusCode, O
         .header(header::CONTENT_TYPE, APPLICATION_JSON)
         .header(header::CONTENT_LENGTH, raw_body.len().to_string())
         .header(header::ACCEPT, APPLICATION_JSON)
-        .body(raw_body)
+        .body(Some(raw_body))
         .expect("failed to build request");
 
     make_request(req)
 }
 
-fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), DockerError> {
+fn make_request(req: Request<Option<Vec<u8>>>) -> Result<(StatusCode, Option<Value>), DockerError> {
     let mut stream = UnixStream::connect(DOCKER_SOCK)?;
 
     send_request(req, &mut stream)?;
@@ -406,7 +406,7 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
     };
 }
 
-fn send_request(req: Request<Vec<u8>>, stream: &mut UnixStream) -> Result<(), DockerError> {
+fn send_request(req: Request<Option<Vec<u8>>>, stream: &mut UnixStream) -> Result<(), DockerError> {
     stream.write_all(&*format!("{} {} HTTP/1.1\r\n", req.method().as_str(), req.uri().to_string()).into_bytes())?;
     for (name, value) in req.headers() {
         stream.write_all(name.as_str().as_bytes())?;
@@ -415,8 +415,8 @@ fn send_request(req: Request<Vec<u8>>, stream: &mut UnixStream) -> Result<(), Do
         stream.write_all("\r\n".as_bytes())?;
     }
     stream.write_all("\r\n".as_bytes())?;
-    if req.body().len() > 0 {
-        stream.write_all(req.body())?;
+    if let Some(body) = req.body() {
+        stream.write_all(body)?;
     }
     stream.flush()?;
     Ok(())
