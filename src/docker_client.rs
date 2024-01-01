@@ -370,13 +370,9 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
 
             let body = if content_length > 0 {
                 if content_length > (bytes_read - header_size) {
-                    let mut body_buffer = Vec::from(&buffer[header_size..bytes_read]);
-                    body_buffer.resize(content_length, 0);
-                    stream.read_exact(&mut body_buffer[(bytes_read - header_size)..])?;
-                    body_buffer
-                } else {
-                    (&buffer[header_size..(header_size + content_length)]).to_vec()
+                    stream.read_exact(&mut buffer[bytes_read..(content_length - header_size)])?;
                 }
+                Some(&buffer[header_size..(header_size + content_length)])
             } else if transfer_encoding.eq_ignore_ascii_case("chunked".as_bytes()) {
                 let chunk_bytes_read = stream.read(&mut buffer[bytes_read..])?;
 
@@ -388,22 +384,23 @@ fn make_request(req: Request<Vec<u8>>) -> Result<(StatusCode, Option<Value>), Do
                     chunk_size_end += 1;
                 }
                 let chunk_size = usize::from_radix_16_checked(&buffer[header_size..chunk_size_end]).0.ok_or(HttpError(httparse::Error::Token))?;
-                (&buffer[(chunk_size_end + 2)..(chunk_size_end + 2 + chunk_size)]).to_vec()
+                Some(&buffer[(chunk_size_end + 2)..(chunk_size_end + 2 + chunk_size)])
             } else {
-                Vec::new()
+                None
             };
 
-            return if !body.is_empty() {
-                if content_type.eq_ignore_ascii_case(APPLICATION_JSON.as_bytes()) {
-                    let json = Some(serde_json::from_slice(&*body).map_err(|err|
-                        InvalidJson(status_code.into(), String::from_utf8(body).unwrap_or(String::from("")), err)
-                    )?);
-                    Ok((status_code, json))
-                } else {
-                    Err(InvalidResponse(status_code.as_u16(), String::from_utf8(body).unwrap_or(String::from(""))))
+            return match body {
+                Some(body) => {
+                    if content_type.eq_ignore_ascii_case(APPLICATION_JSON.as_bytes()) {
+                        let json = Some(serde_json::from_slice(body).map_err(|err|
+                            InvalidJson(status_code.into(), String::from_utf8(body.to_vec()).unwrap_or(String::from("")), err)
+                        )?);
+                        Ok((status_code, json))
+                    } else {
+                        Err(InvalidResponse(status_code.as_u16(), String::from_utf8(body.to_vec()).unwrap_or(String::from(""))))
+                    }
                 }
-            } else {
-                Ok((status_code, None))
+                None => Ok((status_code, None))
             };
         }
     };
