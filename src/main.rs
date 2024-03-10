@@ -3,7 +3,9 @@
 //! Run a program in a Docker container.
 
 use std::process::ExitCode;
+
 use clap::Parser;
+
 use contained::run;
 
 #[derive(Parser)]
@@ -24,11 +26,15 @@ struct Cli {
 
     /// Mount current directory writable
     #[arg(long, requires = "current_dir")]
-    writable: bool
+    writable: bool,
+
+    /// Run GUI X11 application
+    #[arg(short = 'X')]
+    x11: bool,
 }
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
-    let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.current_dir, args.writable)?;
+    let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.current_dir, args.writable, args.x11)?;
     Ok(ExitCode::from(status_code))
 }

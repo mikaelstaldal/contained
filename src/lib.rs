@@ -32,7 +32,9 @@ const ENV: [&str; 11] = [
 const SYSTEM_MOUNTS: [&str; 8] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr"];
 const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 
-pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, writable: bool) -> Result<(String, u8), anyhow::Error> {
+const X11_SOCKET: &'static str = "/tmp/.X11-unix";
+
+pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, writable: bool, x11: bool) -> Result<(String, u8), anyhow::Error> {
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
     let program = fs::canonicalize(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?;
@@ -59,12 +61,21 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     } else {
         None
     };
+    let mut env = Vec::new();
+    for e in ENV {
+       env.push(e.to_string());
+    }
+    if x11 {
+        env.push("DISPLAY".to_string());
+        binds.push(Bind::new(X11_SOCKET, X11_SOCKET, &[]));
+    }
+
     let id = create_container(
         program.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?,
         arguments,
         network,
         &user,
-        &ENV.map(|e| e.to_string()),
+        &env,
         &binds,
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,
