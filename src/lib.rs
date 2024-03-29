@@ -38,15 +38,20 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
     let program = fs::canonicalize(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?;
-    let mut binds = vec![Bind::new(program_dir, program_dir, &["ro"])];
     let current_dir = current_dir()?;
     let current_dir_str = current_dir.to_str().ok_or(anyhow!("Current dir is not valid Unicode"))?;
     let current_dir_bind_option = [if writable { "rw" } else { "ro" }];
+
+    let mut binds = Vec::new();
     let working_dir: &str;
     if mount_current_dir {
+        if program_dir != current_dir_str {
+            binds.push(Bind::new(program_dir, program_dir, &["ro"]));
+        }
         binds.push(Bind::new(current_dir_str, current_dir_str, &current_dir_bind_option));
         working_dir = current_dir_str;
     } else {
+        binds.push(Bind::new(program_dir, program_dir, &["ro"]));
         working_dir = "/";
     }
     for path in SYSTEM_MOUNTS {
