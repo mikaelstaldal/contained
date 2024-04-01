@@ -98,9 +98,11 @@ pub fn create_container(program: &str,
     let mut entrypoint = arguments.to_vec();
     entrypoint.insert(0, program.to_string());
 
-    let environment = environment.into_iter().flat_map(|key| env::var_os(key).map(|value|
-        format!("{}={}", key, value.to_str().expect("UTF-8")))
-    ).collect::<Vec<String>>();
+    let environment = environment.into_iter().flat_map(|key| if key.contains('=') {
+        Some(key.to_string())
+    } else {
+        env::var_os(key).map(|value| format!("{}={}", key, value.to_str().expect("UTF-8")))
+    }).collect::<Vec<String>>();
     let binds = binds.into_iter().map(|bind| format!("{}:{}{}",
                                                      bind.host_source,
                                                      bind.container_dest,

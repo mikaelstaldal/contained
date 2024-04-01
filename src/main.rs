@@ -21,12 +21,24 @@ struct Cli {
     network: String,
 
     /// Mount current directory
-    #[arg(long)]
+    #[arg(long, conflicts_with = "current_dir_writable")]
     current_dir: bool,
 
     /// Mount current directory writable
-    #[arg(long, requires = "current_dir")]
-    writable: bool,
+    #[arg(long, conflicts_with = "current_dir")]
+    current_dir_writable: bool,
+
+    /// Mount additional directory read-only
+    #[arg(long)]
+    mount: Vec<String>,
+
+    /// Mount additional directory writable
+    #[arg(long)]
+    mount_writable: Vec<String>,
+
+    /// Pass environment variable
+    #[arg(short, long)]
+    env: Vec<String>,
 
     /// Run GUI X11 application
     #[arg(short = 'X')]
@@ -35,6 +47,8 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
-    let (_, status_code) = run(&args.program, &args.arguments, &args.network, args.current_dir, args.writable, args.x11)?;
+    let (_, status_code) = run(&args.program, &args.arguments, &args.network,
+                               args.current_dir || args.current_dir_writable, args.current_dir_writable,
+                               &args.mount, &args.mount_writable, &args.env, args.x11)?;
     Ok(ExitCode::from(status_code))
 }

@@ -34,13 +34,14 @@ const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 
 const X11_SOCKET: &'static str = "/tmp/.X11-unix";
 
-pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, writable: bool, x11: bool) -> Result<(String, u8), anyhow::Error> {
+pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, mount_current_dir_writable: bool,
+           mount_readonly: &[String], mount_writable: &[String], extra_env: &[String], x11: bool) -> Result<(String, u8), anyhow::Error> {
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
     let program = fs::canonicalize(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?;
     let current_dir = current_dir()?;
     let current_dir_str = current_dir.to_str().ok_or(anyhow!("Current dir is not valid Unicode"))?;
-    let current_dir_bind_option = [if writable { "rw" } else { "ro" }];
+    let current_dir_bind_option = [if mount_current_dir_writable { "rw" } else { "ro" }];
 
     let mut binds = Vec::new();
     let working_dir: &str;
@@ -59,6 +60,13 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
             binds.push(Bind::new(path, path, &["ro"]));
         }
     }
+    for path in mount_readonly {
+        binds.push(Bind::new(path, path, &["ro"]));
+    }
+    for path in mount_writable {
+        binds.push(Bind::new(path, path, &["rw"]));
+    }
+
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let tty = if is_tty {
         let (width, height) = terminal_size()?;
@@ -66,10 +74,15 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     } else {
         None
     };
+
     let mut env = Vec::new();
     for e in ENV {
-       env.push(e.to_string());
+        env.push(e.to_string());
     }
+    for e in extra_env {
+        env.push(e.to_string());
+    }
+
     if x11 {
         env.push("DISPLAY".to_string());
         binds.push(Bind::new(X11_SOCKET, X11_SOCKET, &[]));
