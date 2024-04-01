@@ -17,6 +17,10 @@ struct Cli {
     /// Arguments to the programs
     arguments: Vec<String>,
 
+    /// Image to use
+    #[arg(long, default_value = "empty")]
+    image: String,
+
     /// Network mode
     #[arg(long, default_value = "none")]
     network: String,
@@ -52,7 +56,7 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
-    let (_, status_code) = run(&args.program, &args.arguments, &args.network,
+    let (_, status_code) = run(&args.image, &args.program, &args.arguments, &args.network,
                                args.current_dir || args.current_dir_writable, args.current_dir_writable,
                                &args.mount, &args.mount_writable, &args.env, args.workdir, args.x11)?;
     Ok(ExitCode::from(status_code))

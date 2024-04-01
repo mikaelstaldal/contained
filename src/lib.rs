@@ -34,7 +34,7 @@ const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 
 const X11_SOCKET: &'static str = "/tmp/.X11-unix";
 
-pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, mount_current_dir_writable: bool,
+pub fn run(image: &str, program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, mount_current_dir_writable: bool,
            mount_readonly: &[String], mount_writable: &[String], extra_env: &[String], workdir: Option<String>, x11: bool) -> Result<(String, u8), anyhow::Error> {
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
     let program = fs::canonicalize(program)?;
@@ -92,6 +92,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     }
 
     let id = create_container(
+        image,
         program.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?,
         arguments,
         network,

@@ -85,7 +85,8 @@ impl Tty {
 }
 
 /// Creates a Docker container.
-pub fn create_container(program: &str,
+pub fn create_container(image: &str,
+                        program: &str,
                         arguments: &[String],
                         network: &str,
                         user: &str,
@@ -117,7 +118,7 @@ pub fn create_container(program: &str,
 
     let (status, maybe_body) = body_request(Method::POST, "/containers/create",
                                             json!({
-                                  "Image": "empty",
+                                  "Image": image,
                                   "Entrypoint": entrypoint,
                                   "User": user,
                                   "AttachStdin": true,
