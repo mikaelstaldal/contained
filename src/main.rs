@@ -41,6 +41,10 @@ struct Cli {
     #[arg(short, long)]
     env: Vec<String>,
 
+    /// Working directory
+    #[arg(short, long)]
+    workdir: Option<String>,
+
     /// Run GUI X11 application
     #[arg(short = 'X')]
     x11: bool,
@@ -50,6 +54,6 @@ fn main() -> Result<ExitCode, anyhow::Error> {
     let args = Cli::parse();
     let (_, status_code) = run(&args.program, &args.arguments, &args.network,
                                args.current_dir || args.current_dir_writable, args.current_dir_writable,
-                               &args.mount, &args.mount_writable, &args.env, args.x11)?;
+                               &args.mount, &args.mount_writable, &args.env, args.workdir, args.x11)?;
     Ok(ExitCode::from(status_code))
 }

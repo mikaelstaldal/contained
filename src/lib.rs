@@ -35,7 +35,7 @@ const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 const X11_SOCKET: &'static str = "/tmp/.X11-unix";
 
 pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_dir: bool, mount_current_dir_writable: bool,
-           mount_readonly: &[String], mount_writable: &[String], extra_env: &[String], x11: bool) -> Result<(String, u8), anyhow::Error> {
+           mount_readonly: &[String], mount_writable: &[String], extra_env: &[String], workdir: Option<String>, x11: bool) -> Result<(String, u8), anyhow::Error> {
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
     let program = fs::canonicalize(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?.to_str().ok_or(anyhow!("Program name is not valid Unicode"))?;
@@ -50,10 +50,10 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
             binds.push(Bind::new(program_dir, program_dir, &["ro"]));
         }
         binds.push(Bind::new(current_dir_str, current_dir_str, &current_dir_bind_option));
-        working_dir = current_dir_str;
+        working_dir = workdir.as_deref().unwrap_or(current_dir_str);
     } else {
         binds.push(Bind::new(program_dir, program_dir, &["ro"]));
-        working_dir = "/";
+        working_dir = workdir.as_deref().unwrap_or("/");
     }
     for path in SYSTEM_MOUNTS {
         if Path::new(path).exists() {
@@ -66,6 +66,9 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
     for path in mount_writable {
         binds.push(Bind::new(path, path, &["rw"]));
     }
+
+    let absolute_working_dir = fs::canonicalize(working_dir)?;
+    let absolute_working_dir_str = absolute_working_dir.to_str().ok_or(anyhow!("Working directory name is not valid Unicode"))?;
 
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
     let tty = if is_tty {
@@ -97,7 +100,7 @@ pub fn run(program: &Path, arguments: &[String], network: &str, mount_current_di
         &binds,
         &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
         true,
-        working_dir,
+        absolute_working_dir_str,
         &tty)
         .context("Unable to create container")?;
 
