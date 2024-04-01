@@ -9,6 +9,7 @@ use clap::Parser;
 use contained::run;
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
     /// The program to run
     program: std::path::PathBuf,
