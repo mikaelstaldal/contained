@@ -133,7 +133,9 @@ pub fn create_container(image: &str,
                                       "Binds": binds,
                                       "ReadonlyRootfs": readonly_rootfs,
                                       "Tmpfs": tmpfs,
-                                      "ConsoleSize": tty.as_ref().map(|t| [t.height, t.width])
+                                      "ConsoleSize": tty.as_ref().map(|t| [t.height, t.width]),
+                                      "CapDrop": [ "ALL" ],
+                                      "SecurityOpt": [ "no-new-privileges:true" ],
                                   },
                               }))?;
     match maybe_body {
