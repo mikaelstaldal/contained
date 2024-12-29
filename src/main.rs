@@ -2,17 +2,16 @@
 //!
 //! Run a program in a Docker container.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-
-use contained::run;
 
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
     /// The program to run
-    program: std::path::PathBuf,
+    program: PathBuf,
 
     /// Arguments to the programs
     arguments: Vec<String>,
@@ -55,9 +54,9 @@ struct Cli {
 }
 
 fn main() -> Result<ExitCode, anyhow::Error> {
-    let args = Cli::parse();
-    let (_, status_code) = run(&args.image, &args.program, &args.arguments, &args.network,
-                               args.current_dir || args.current_dir_writable, args.current_dir_writable,
-                               &args.mount, &args.mount_writable, &args.env, args.workdir, args.x11)?;
+    let cli = Cli::parse();
+    let (_, status_code) = contained::run(&cli.image, &cli.program, &cli.arguments, &cli.network,
+                               cli.current_dir || cli.current_dir_writable, cli.current_dir_writable,
+                               &cli.mount, &cli.mount_writable, &cli.env, cli.workdir, cli.x11)?;
     Ok(ExitCode::from(status_code))
 }
