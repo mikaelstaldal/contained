@@ -55,8 +55,18 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let cli = Cli::parse();
-    let (_, status_code) = contained::run(&cli.image, &cli.program, &cli.arguments, &cli.network,
-                               cli.current_dir || cli.current_dir_writable, cli.current_dir_writable,
-                               &cli.mount, &cli.mount_writable, &cli.env, cli.workdir, cli.x11)?;
+    let (_, status_code) = contained::run(
+        &cli.image,
+        &cli.program,
+        &cli.arguments,
+        &cli.network,
+        cli.current_dir || cli.current_dir_writable,
+        cli.current_dir_writable,
+        &cli.mount,
+        &cli.mount_writable,
+        &cli.env,
+        cli.workdir,
+        cli.x11,
+    )?;
     Ok(ExitCode::from(status_code))
 }
