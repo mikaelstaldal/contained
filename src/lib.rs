@@ -36,7 +36,6 @@ const ENV: [&str; 11] = [
 const SYSTEM_MOUNTS: [&str; 8] = [
     "/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr",
 ];
-const TMPFS_MOUNTS: [&str; 4] = ["/tmp", "/var/tmp", "/run", "/var/run"];
 const USER_MOUNTS: [&str; 2] = ["/etc/passwd", "/etc/group"];
 
 const X11_SOCKET: &'static str = "/tmp/.X11-unix";
@@ -144,6 +143,12 @@ fn run_body(
         binds.push(Bind::new(path, path, &["rw"]));
     }
 
+    let mut tmpfs = Vec::new();
+    tmpfs.push(Tmpfs::new("/tmp", &["rw", "exec"]));
+    tmpfs.push(Tmpfs::new("/var/tmp", &["rw", "exec"]));
+    tmpfs.push(Tmpfs::new("/run", &["rw", "noexec"]));
+    tmpfs.push(Tmpfs::new("/var/run", &["rw", "noexec"]));
+
     let absolute_working_dir = fs::canonicalize(working_dir)?;
     let absolute_working_dir_str = absolute_working_dir
         .to_str()
@@ -179,7 +184,7 @@ fn run_body(
         &user,
         &env,
         &binds,
-        &TMPFS_MOUNTS.map(|path| Tmpfs::new(path, &["rw", "noexec"])),
+        &tmpfs,
         true,
         absolute_working_dir_str,
         &tty,
