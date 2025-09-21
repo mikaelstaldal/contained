@@ -14,10 +14,7 @@ use termion::raw::IntoRawMode;
 use termion::terminal_size;
 use users::{get_effective_gid, get_effective_uid};
 
-use crate::docker_client::{
-    attach_container, create_container, create_container_body, remove_container, start_container,
-    wait_container, Bind, Tmpfs, Tty,
-};
+use crate::docker_client::{Bind, DockerClient, Tmpfs, Tty};
 
 const ENV: [&str; 11] = [
     "LANG",
@@ -53,6 +50,8 @@ pub fn run(
     workdir: Option<String>,
     x11: bool,
 ) -> Result<(String, u8), anyhow::Error> {
+    let client = DockerClient::new()?;
+
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
 
     let is_tty =
@@ -65,6 +64,7 @@ pub fn run(
     };
 
     let body = run_body(
+        &client,
         image,
         program,
         arguments,
@@ -79,12 +79,15 @@ pub fn run(
         x11,
         &tty,
     )?;
-    let id = create_container(body).context("Unable to create container")?;
+    let id = client
+        .create_container(body)
+        .context("Unable to create container")?;
 
-    run_container_with_tty(tty, &id)
+    run_container_with_tty(&client, tty, &id)
 }
 
 fn run_body(
+    docker_client: &DockerClient,
     image: &str,
     program: &Path,
     arguments: &[String],
@@ -176,7 +179,7 @@ fn run_body(
             .to_string(),
     );
 
-    let body = create_container_body(
+    let body = docker_client.create_container_body(
         image,
         &None,
         &Some(&entrypoint),
@@ -202,6 +205,8 @@ pub fn run_image(
     mount_writable: &[String],
     extra_env: &[String],
 ) -> Result<(String, u8), anyhow::Error> {
+    let client = DockerClient::new()?;
+
     let user = format!("{}:{}", get_effective_uid(), get_effective_gid());
 
     let is_tty =
@@ -214,6 +219,7 @@ pub fn run_image(
     };
 
     let body = run_image_body(
+        &client,
         image,
         arguments,
         entrypoint,
@@ -225,12 +231,15 @@ pub fn run_image(
         extra_env,
         &tty,
     )?;
-    let id = create_container(body).context("Unable to create container")?;
+    let id = client
+        .create_container(body)
+        .context("Unable to create container")?;
 
-    run_container_with_tty(tty, &id)
+    run_container_with_tty(&client, tty, &id)
 }
 
 fn run_image_body(
+    client: &DockerClient,
     image: &str,
     arguments: &[String],
     entrypoint: Option<String>,
@@ -277,7 +286,7 @@ fn run_image_body(
         .to_str()
         .ok_or(anyhow!("Working directory name is not valid Unicode"))?;
 
-    Ok(create_container_body(
+    Ok(client.create_container_body(
         image,
         &Some(arguments),
         &entrypoint.as_ref().map(|e| slice::from_ref(e)),
@@ -292,37 +301,47 @@ fn run_image_body(
     ))
 }
 
-fn run_container_with_tty(tty: Option<Tty>, id: &str) -> Result<(String, u8), anyhow::Error> {
+fn run_container_with_tty(
+    client: &DockerClient,
+    tty: Option<Tty>,
+    id: &str,
+) -> Result<(String, u8), anyhow::Error> {
     if tty.is_some() {
         let stdout = io::stdout().into_raw_mode()?; // set stdout in raw mode so we can do TTY
-        let result = run_container(&id);
+        let result = run_container(client, &id);
         drop(stdout); // restore terminal mode
         result
     } else {
-        run_container(&id)
+        run_container(client, &id)
     }
 }
 
-fn run_container(id: &str) -> Result<(String, u8), anyhow::Error> {
-    attach_container(&id).context("Unable to attach container")?;
+fn run_container(client: &DockerClient, id: &str) -> Result<(String, u8), anyhow::Error> {
+    client
+        .attach_container(&id)
+        .context("Unable to attach container")?;
 
     let id_copy = id.to_string();
     let (tx, wait_rx) = mpsc::channel();
     thread::Builder::new()
         .name("wait".to_string())
         .spawn(move || {
-            tx.send(wait_container(&id_copy))
+            tx.send(DockerClient::new().unwrap().wait_container(&id_copy))
                 .expect("Unable to send wait result");
         })?;
 
-    start_container(&id).context("Unable to start container")?;
+    client
+        .start_container(&id)
+        .context("Unable to start container")?;
 
     let result = wait_rx
         .recv()?
         .context("Unable to wait for container")
         .map(|status_code| (id.to_string(), status_code))?;
 
-    remove_container(&id).context("Unable to remove container")?;
+    client
+        .remove_container(&id)
+        .context("Unable to remove container")?;
 
     Ok(result)
 }
@@ -331,11 +350,13 @@ mod docker_client;
 
 #[cfg(test)]
 mod tests {
-    use std::error;
     use super::*;
+    use std::error;
 
     #[test]
     fn test_run_body() -> Result<(), Box<dyn error::Error>> {
+        let client = DockerClient::new()?;
+
         let image = "test_image";
         let program = Path::new("/usr/bin/ls");
         let arguments = ["arg1".to_string(), "arg2".to_string()];
@@ -351,6 +372,7 @@ mod tests {
         let tty = None;
 
         let body = run_body(
+            &client,
             image,
             program,
             &arguments,
@@ -363,20 +385,18 @@ mod tests {
             &extra_env,
             workdir,
             x11,
-            &tty)?;
+            &tty,
+        )?;
 
-        println!("{}", serde_json::to_string_pretty(&body).expect("JSON serialize"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).expect("JSON serialize")
+        );
 
         assert_eq!(body["Image"].as_str(), Some(image));
         assert_eq!(
-            body["Entrypoint"]
-                .as_array()
-                .unwrap(),
-            &[
-                "/usr/bin/ls",
-                "arg1",
-                "arg2",
-            ]
+            body["Entrypoint"].as_array().unwrap(),
+            &["/usr/bin/ls", "arg1", "arg2",]
         );
 
         // Check for bind mounts
@@ -420,6 +440,8 @@ mod tests {
 
     #[test]
     fn test_run_image_body() -> Result<(), Box<dyn error::Error>> {
+        let client = DockerClient::new()?;
+
         let image = "test_image";
         let arguments = ["arg1".to_string(), "arg2".to_string()];
         let entrypoint = Some("test_entrypoint".to_string());
@@ -432,6 +454,7 @@ mod tests {
         let tty = None;
 
         let body = run_image_body(
+            &client,
             image,
             &arguments,
             entrypoint.clone(),
@@ -444,7 +467,10 @@ mod tests {
             &tty,
         )?;
 
-        println!("{}", serde_json::to_string_pretty(&body).expect("JSON serialize"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).expect("JSON serialize")
+        );
 
         assert_eq!(body["Image"].as_str(), Some(image));
         assert_eq!(
