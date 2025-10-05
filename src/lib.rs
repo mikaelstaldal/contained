@@ -308,17 +308,21 @@ fn run_container_with_tty(
 ) -> Result<(String, u8), anyhow::Error> {
     if tty.is_some() {
         let stdout = io::stdout().into_raw_mode()?; // set stdout in raw mode so we can do TTY
-        let result = run_container(client, &id);
+        let result = run_container(client, &id, true);
         drop(stdout); // restore terminal mode
         result
     } else {
-        run_container(client, &id)
+        run_container(client, &id, false)
     }
 }
 
-fn run_container(client: &DockerClient, id: &str) -> Result<(String, u8), anyhow::Error> {
+fn run_container(
+    client: &DockerClient,
+    id: &str,
+    is_tty: bool,
+) -> Result<(String, u8), anyhow::Error> {
     client
-        .attach_container(&id)
+        .attach_container(&id, is_tty)
         .context("Unable to attach container")?;
 
     let id_copy = id.to_string();

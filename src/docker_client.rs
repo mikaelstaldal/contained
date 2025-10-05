@@ -240,7 +240,7 @@ impl DockerClient {
     }
 
     /// Attach to a Docker container and stream the output.
-    pub fn attach_container(&self, id: &str) -> Result<(), DockerError> {
+    pub fn attach_container(&self, id: &str, is_tty: bool) -> Result<(), DockerError> {
         let req = Request::builder()
             .method(Method::POST)
             .uri(&format!(
@@ -259,7 +259,7 @@ impl DockerClient {
 
         let write_stream = stream.try_clone()?;
 
-        if is_multiplexed {
+        if is_multiplexed.unwrap_or(!is_tty) {
             handle_multiplexed(buffer, bytes_read, header_size, stream, write_stream)?;
         } else {
             handle_raw(buffer, bytes_read, header_size, stream, write_stream)?;
@@ -390,7 +390,7 @@ impl DockerClient {
 
 fn read_response(
     mut stream: UnixStream,
-) -> Result<([u8; BUFFER_SIZE], usize, usize, UnixStream, bool), DockerError> {
+) -> Result<([u8; BUFFER_SIZE], usize, usize, UnixStream, Option<bool>), DockerError> {
     let mut buffer = [0; BUFFER_SIZE];
     let mut bytes_read: usize = 0;
     loop {
@@ -412,9 +412,11 @@ fn read_response(
                 .unwrap_or(&[])
                 .to_vec();
             let is_multiplexed = if content_type == b"application/vnd.docker.multiplexed-stream" {
-                true
+                Some(true)
             } else if content_type == b"application/vnd.docker.raw-stream" {
-                false
+                Some(false)
+            } else if content_type == b"tcp" {
+                None
             } else {
                 return Err(InvalidResponse(
                     status_code.as_u16(),
