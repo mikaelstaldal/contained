@@ -4,11 +4,12 @@
 
 use anyhow::anyhow;
 use std::env::current_dir;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, io};
+use std::{env, fs, io};
 
 const ENV: [&str; 11] = [
     "LANG",
@@ -86,28 +87,30 @@ fn run_cmd(
 
     cmd.arg("--read-only");
 
-    let current_dir = current_dir()?;
-    let current_dir_str = current_dir
-        .to_str()
-        .ok_or(anyhow!("Current dir is not valid Unicode"))?;
-
     let program = fs::canonicalize(program)?;
     let program_dir = program
         .parent()
         .ok_or(anyhow!("Invalid path"))?
-        .to_str()
-        .ok_or(anyhow!("Program name is not valid Unicode"))?;
+        .to_path_buf();
 
     if mount_current_dir {
-        if program_dir != current_dir_str {
-            cmd.arg("--mount").arg(format!(
-                "type=bind,source={program_dir},target={program_dir},readonly"
-            ));
+        let current_dir = current_dir()?;
+
+        if program_dir != current_dir {
+            let mut program_dir_arg = OsString::from("type=bind,source=");
+            program_dir_arg.push(program_dir.clone());
+            program_dir_arg.push(",target=");
+            program_dir_arg.push(program_dir.clone());
+            program_dir_arg.push(",readonly");
+            cmd.arg("--mount").arg(program_dir_arg);
         }
     } else {
-        cmd.arg("--mount").arg(format!(
-            "type=bind,source={program_dir},target={program_dir},readonly"
-        ));
+        let mut program_dir_arg = OsString::from("type=bind,source=");
+        program_dir_arg.push(program_dir.clone());
+        program_dir_arg.push(",target=");
+        program_dir_arg.push(program_dir.clone());
+        program_dir_arg.push(",readonly");
+        cmd.arg("--mount").arg(program_dir_arg);
     }
 
     for path in SYSTEM_MOUNTS {
@@ -226,12 +229,6 @@ fn podman_cmd(
 
     let is_tty =
         io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal();
-    /*    let tty = if is_tty {
-        let (width, height) = terminal_size()?;
-        Some(Tty::new(height, width))
-    } else {
-        None
-    }; */
 
     if is_tty {
         cmd.arg("--tty");
@@ -241,22 +238,27 @@ fn podman_cmd(
 
     if mount_current_dir {
         let current_dir = current_dir()?;
-        let current_dir_str = current_dir
-            .to_str()
-            .ok_or(anyhow!("Current dir is not valid Unicode"))?;
 
-        if mount_current_dir_writable {
-            cmd.arg("--mount").arg(format!(
-                "type=bind,source={current_dir_str},target={current_dir_str}"
-            ));
-        } else {
-            cmd.arg("--mount").arg(format!(
-                "type=bind,source={current_dir_str},target={current_dir_str},readonly"
-            ));
+        let home_dir = PathBuf::from(env::var_os("HOME").ok_or(anyhow!("HOME not set"))?);
+        if (current_dir == home_dir) || (home_dir.starts_with(current_dir.as_path())) {
+            return Err(anyhow!("Cannot run from home directory or its parent directories"));
         }
 
-        cmd.arg("--workdir")
-            .arg(workdir.as_deref().unwrap_or(current_dir_str));
+        let mut current_dir_arg = OsString::from("type=bind,source=");
+        current_dir_arg.push(current_dir.clone());
+        current_dir_arg.push(",target=");
+        current_dir_arg.push(current_dir.clone());
+        if !mount_current_dir_writable {
+            current_dir_arg.push(",readonly");
+        }
+        cmd.arg("--mount").arg(current_dir_arg);
+
+        cmd.arg("--workdir");
+        if let Some(workdir) = workdir {
+            cmd.arg(workdir);
+        } else {
+            cmd.arg(current_dir);
+        }
     } else {
         cmd.arg("--workdir").arg(workdir.as_deref().unwrap_or("/"));
     }
@@ -317,7 +319,7 @@ mod tests {
         )?;
 
         let args: Vec<_> = cmd.get_args().map(|s| s.to_str().unwrap()).collect();
-        
+
         for arg in args.iter() {
             println!("{:?}", arg);
         }
