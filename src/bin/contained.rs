@@ -1,6 +1,6 @@
 //! # contained
 //!
-//! Run a program in a Docker container, without having to build a specific image for it
+//! Run a program in a Podman container without having to build a specific image for it
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -24,11 +24,11 @@ struct Cli {
     #[arg(long, default_value = "none")]
     network: String,
 
-    /// Mount current directory
+    /// Mount the current directory
     #[arg(long, conflicts_with = "current_dir_writable")]
     current_dir: bool,
 
-    /// Mount current directory writable
+    /// Mount the current directory writable
     #[arg(long, conflicts_with = "current_dir")]
     current_dir_writable: bool,
 
@@ -55,7 +55,7 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let cli = Cli::parse();
-    let (_, status_code) = contained::run(
+    contained::run(
         &cli.image,
         &cli.program,
         &cli.arguments,
@@ -68,5 +68,5 @@ fn main() -> Result<ExitCode, anyhow::Error> {
         cli.workdir,
         cli.x11,
     )?;
-    Ok(ExitCode::from(status_code))
+    Ok(ExitCode::SUCCESS)
 }

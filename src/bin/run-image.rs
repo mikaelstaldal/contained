@@ -1,6 +1,6 @@
 //! # run-image
 //!
-//! Run a docker image
+//! Run a Podman image
 
 use std::process::ExitCode;
 
@@ -23,7 +23,11 @@ struct Cli {
     #[arg(long, default_value = "none")]
     network: String,
 
-    /// Mount current directory writable
+    /// Mount the current directory
+    #[arg(long, conflicts_with = "current_dir_writable")]
+    current_dir: bool,
+
+    /// Mount the current directory writable
     #[arg(long)]
     current_dir_writable: bool,
 
@@ -38,19 +42,30 @@ struct Cli {
     /// Pass environment variable
     #[arg(short, long)]
     env: Vec<String>,
+
+    /// Working directory
+    #[arg(short, long)]
+    workdir: Option<String>,
+
+    /// Run GUI X11 application
+    #[arg(short = 'X')]
+    x11: bool,
 }
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let cli = Cli::parse();
-    let (_, status_code) = contained::run_image(
+    contained::run_image(
         &cli.image,
         &cli.arguments,
         cli.entrypoint,
         &cli.network,
+        cli.current_dir || cli.current_dir_writable,
         cli.current_dir_writable,
         &cli.mount,
         &cli.mount_writable,
         &cli.env,
+        cli.workdir,
+        cli.x11,
     )?;
-    Ok(ExitCode::from(status_code))
+    Ok(ExitCode::SUCCESS)
 }
