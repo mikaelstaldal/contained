@@ -2,7 +2,9 @@
 //!
 //! Run Podman containers.
 
-use anyhow::anyhow;
+#![cfg(target_os = "linux")]
+
+use anyhow::{anyhow, Context};
 use std::env::current_dir;
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -29,7 +31,7 @@ const SYSTEM_MOUNTS: [&str; 8] = [
     "/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr",
 ];
 
-const X11_SOCKET: &'static str = "/tmp/.X11-unix";
+const X11_SOCKET: &str = "/tmp/.X11-unix";
 
 pub fn run(
     image: &str,
@@ -38,10 +40,10 @@ pub fn run(
     network: &str,
     mount_current_dir: bool,
     mount_current_dir_writable: bool,
-    mount_readonly: &[String],
-    mount_writable: &[String],
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
     extra_env: &[String],
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
     x11: bool,
 ) -> Result<(), anyhow::Error> {
     let mut command = run_cmd(
@@ -58,7 +60,9 @@ pub fn run(
         x11,
     )?;
 
-    Err(anyhow!(command.exec()))
+    let error = command.exec();
+    // If we reach this point, exec failed
+    Err(anyhow::Error::new(error).context("Failed to exec"))
 }
 
 fn run_cmd(
@@ -68,10 +72,10 @@ fn run_cmd(
     network: &str,
     mount_current_dir: bool,
     mount_current_dir_writable: bool,
-    mount_readonly: &[String],
-    mount_writable: &[String],
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
     extra_env: &[String],
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
     x11: bool,
 ) -> Result<Command, anyhow::Error> {
     let mut cmd = podman_cmd(
@@ -87,7 +91,7 @@ fn run_cmd(
 
     cmd.arg("--read-only");
 
-    let program = fs::canonicalize(program)?;
+    let program = fs::canonicalize(program).context(format!("Program {:?} not found", program))?;
     let program_dir = program
         .parent()
         .ok_or(anyhow!("Invalid path"))?
@@ -147,10 +151,10 @@ pub fn run_image(
     network: &str,
     mount_current_dir: bool,
     mount_current_dir_writable: bool,
-    mount_readonly: &[String],
-    mount_writable: &[String],
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
     extra_env: &[String],
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
     x11: bool,
 ) -> Result<(), anyhow::Error> {
     let mut command = run_image_cmd(
@@ -167,7 +171,9 @@ pub fn run_image(
         x11,
     )?;
 
-    Err(anyhow!(command.exec()))
+    let error = command.exec();
+    // If we reach this point, exec failed
+    Err(anyhow::Error::new(error).context("Failed to exec"))
 }
 
 fn run_image_cmd(
@@ -177,10 +183,10 @@ fn run_image_cmd(
     network: &str,
     mount_current_dir: bool,
     mount_current_dir_writable: bool,
-    mount_readonly: &[String],
-    mount_writable: &[String],
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
     extra_env: &[String],
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
     x11: bool,
 ) -> Result<Command, anyhow::Error> {
     let mut cmd = podman_cmd(
@@ -211,10 +217,10 @@ fn podman_cmd(
     network: &str,
     mount_current_dir: bool,
     mount_current_dir_writable: bool,
-    mount_readonly: &[String],
-    mount_writable: &[String],
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
     extra_env: &[String],
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
     x11: bool,
 ) -> Result<Command, anyhow::Error> {
     let mut cmd = Command::new("podman");
@@ -241,7 +247,9 @@ fn podman_cmd(
 
         let home_dir = PathBuf::from(env::var_os("HOME").ok_or(anyhow!("HOME not set"))?);
         if (current_dir == home_dir) || (home_dir.starts_with(current_dir.as_path())) {
-            return Err(anyhow!("Cannot run from home directory or its parent directories"));
+            return Err(anyhow!(
+                "Cannot run from home directory or its parent directories"
+            ));
         }
 
         let mut current_dir_arg = OsString::from("type=bind,source=");
@@ -260,16 +268,27 @@ fn podman_cmd(
             cmd.arg(current_dir);
         }
     } else {
-        cmd.arg("--workdir").arg(workdir.as_deref().unwrap_or("/"));
+        if let Some(workdir) = workdir {
+            cmd.arg("--workdir").arg(workdir);
+        }
     }
 
     for path in mount_readonly {
-        cmd.arg("--mount")
-            .arg(format!("type=bind,source={path},target={path},readonly"));
+        let path = fs::canonicalize(path).context(format!("Mount point {:?} not found", path))?;
+        let mut mount_arg = OsString::from("type=bind,source=");
+        mount_arg.push(path.clone());
+        mount_arg.push(",target=");
+        mount_arg.push(path);
+        mount_arg.push(",readonly");
+        cmd.arg("--mount").arg(mount_arg);
     }
     for path in mount_writable {
-        cmd.arg("--mount")
-            .arg(format!("type=bind,source={path},target={path}"));
+        let path = fs::canonicalize(path).context(format!("Mount point {:?} not found", path))?;
+        let mut mount_arg = OsString::from("type=bind,source=");
+        mount_arg.push(path.clone());
+        mount_arg.push(",target=");
+        mount_arg.push(path);
+        cmd.arg("--mount").arg(mount_arg);
     }
 
     if x11 {
@@ -298,8 +317,8 @@ mod tests {
         let network = "host";
         let mount_current_dir = true;
         let mount_current_dir_writable = false;
-        let mount_readonly = ["/readonly1".to_string(), "/readonly2".to_string()];
-        let mount_writable = ["/writable1".to_string()];
+        let mount_readonly = [PathBuf::from("/opt"), PathBuf::from("/run")];
+        let mount_writable = [PathBuf::from("/var")];
         let extra_env = ["MY_ENV=123".to_string()];
         let workdir = None;
         let x11 = false;
@@ -343,11 +362,19 @@ mod tests {
         assert!(args.contains(&&*bind), "mount {bind} not found");
 
         for path in &mount_readonly {
-            let bind = format!("type=bind,source={},target={},readonly", path, path);
+            let bind = format!(
+                "type=bind,source={},target={},readonly",
+                path.to_str().unwrap(),
+                path.to_str().unwrap()
+            );
             assert!(args.contains(&&*bind), "mount {bind} not found");
         }
         for path in &mount_writable {
-            let bind = format!("type=bind,source={},target={}", path, path);
+            let bind = format!(
+                "type=bind,source={},target={}",
+                path.to_str().unwrap(),
+                path.to_str().unwrap()
+            );
             assert!(args.contains(&&*bind), "mount {bind} not found");
         }
 
@@ -370,8 +397,8 @@ mod tests {
         let network = "host";
         let mount_current_dir = false;
         let mount_current_dir_writable = false;
-        let mount_readonly = ["/readonly1".to_string(), "/readonly2".to_string()];
-        let mount_writable = ["/writable1".to_string()];
+        let mount_readonly = [PathBuf::from("/opt"), PathBuf::from("/run")];
+        let mount_writable = [PathBuf::from("/var")];
         let extra_env = ["MY_ENV=123".to_string()];
         let workdir = None;
         let x11 = false;
@@ -405,11 +432,19 @@ mod tests {
 
         // Check for bind mounts
         for path in &mount_readonly {
-            let bind = format!("type=bind,source={},target={},readonly", path, path);
+            let bind = format!(
+                "type=bind,source={},target={},readonly",
+                path.to_str().unwrap(),
+                path.to_str().unwrap()
+            );
             assert!(args.contains(&&*bind), "mount {bind} not found");
         }
         for path in &mount_writable {
-            let bind = format!("type=bind,source={},target={}", path, path);
+            let bind = format!(
+                "type=bind,source={},target={}",
+                path.to_str().unwrap(),
+                path.to_str().unwrap()
+            );
             assert!(args.contains(&&*bind), "mount {bind} not found");
         }
 

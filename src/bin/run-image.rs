@@ -2,6 +2,7 @@
 //!
 //! Run a Podman image
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -33,11 +34,11 @@ struct Cli {
 
     /// Mount additional directory read-only
     #[arg(long)]
-    mount: Vec<String>,
+    mount: Vec<PathBuf>,
 
     /// Mount additional directory writable
     #[arg(long)]
-    mount_writable: Vec<String>,
+    mount_writable: Vec<PathBuf>,
 
     /// Pass environment variable
     #[arg(short, long)]
@@ -45,7 +46,7 @@ struct Cli {
 
     /// Working directory
     #[arg(short, long)]
-    workdir: Option<String>,
+    workdir: Option<PathBuf>,
 
     /// Run GUI X11 application
     #[arg(short = 'X')]
