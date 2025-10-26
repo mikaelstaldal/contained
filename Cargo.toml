@@ -2,7 +2,7 @@
 name = "contained"
 version = "1.4.0"
 edition = "2021"
-description = "Run a program in a Podman container for sandboxing"
+description = "Various tools for sandboxing programs in Linux"
 license = "Apache-2.0"
 
 [dependencies]
