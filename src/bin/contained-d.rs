@@ -1,7 +1,6 @@
-//! # contained
+//! # contained-d
 //!
-//! Run a program in a Podman container without having to build a specific image for it, 
-//! without using a daemon.
+//! Run a program in a container without having to build a specific image for it, via Docker daemon.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -56,7 +55,7 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let cli = Cli::parse();
-    contained::contained_via_command(
+    contained::contained_via_daemon(
         &cli.image,
         &cli.program,
         &cli.arguments,

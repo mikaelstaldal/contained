@@ -1,6 +1,7 @@
 //! # run-image
 //!
-//! Run a Podman image
+//! Convenience tools to run a Podman/Docker/OCI image with Podman without using a daemon, 
+//! alternative to `podman run`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -55,7 +56,7 @@ struct Cli {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     let cli = Cli::parse();
-    contained::run_image(
+    contained::run_image_via_command(
         &cli.image,
         &cli.arguments,
         cli.entrypoint,
