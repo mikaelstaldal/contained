@@ -1,0 +1,44 @@
+profile contained ${HOME}/.cargo/bin/contained {
+    #include <abstractions/base>
+    #include <abstractions/consoles>
+
+    @{PROC}/@{pid}/** r,
+
+    /usr/bin/podman Px,
+}
+
+profile run-image ${HOME}/.cargo/bin/run-image {
+    #include <abstractions/base>
+    #include <abstractions/consoles>
+
+    @{PROC}/@{pid}/** r,
+
+    /usr/bin/podman Px,
+}
+
+profile wrapped ${HOME}/.cargo/bin/wrapped {
+    #include <abstractions/base>
+    #include <abstractions/consoles>
+
+    @{PROC}/@{pid}/** r,
+
+    /usr/bin/bwrap Px,
+}
+
+profile contained-d ${HOME}/.cargo/bin/contained-d {
+    #include <abstractions/base>
+    #include <abstractions/consoles>
+
+    /run/docker.sock rw, # Docker engine
+    /run/user/@{uid}/podman/podman.sock rw, # Podman
+    owner @{HOME}/.docker/desktop/docker.sock rw, # Docker desktop
+}
+
+profile run-image-d ${HOME}/.cargo/bin/run-image-d {
+    #include <abstractions/base>
+    #include <abstractions/consoles>
+
+    /run/docker.sock rw, # Docker engine
+    /run/user/@{uid}/podman/podman.sock rw, # Podman
+    owner @{HOME}/.docker/desktop/docker.sock rw, # Docker desktop
+}
