@@ -28,6 +28,8 @@ const BUFFER_SIZE: usize = 1024;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DockerError {
+    #[error("Unable to connect to Docker socket '{0}': {1}")]
+    ConnectError(String, io::Error),
     #[error("Network error")]
     NetworkError(#[from] io::Error),
     #[error("HTTP error")]
@@ -252,7 +254,8 @@ impl DockerClient {
             .body(None)
             .expect("failed to build request");
 
-        let mut stream = UnixStream::connect(self.socket_path.clone())?;
+        let mut stream = UnixStream::connect(self.socket_path.clone())
+            .map_err(|err| DockerError::ConnectError(self.socket_path.clone(), err))?;
 
         send_request(req, &mut stream)?;
         let (buffer, bytes_read, header_size, stream, is_multiplexed) = read_response(stream)?;
@@ -310,7 +313,8 @@ impl DockerClient {
         &self,
         req: Request<Option<Vec<u8>>>,
     ) -> Result<(StatusCode, Option<Value>), DockerError> {
-        let mut stream = UnixStream::connect(self.socket_path.clone())?;
+        let mut stream = UnixStream::connect(self.socket_path.clone())
+            .map_err(|err| DockerError::ConnectError(self.socket_path.clone(), err))?;
 
         send_request(req, &mut stream)?;
 
