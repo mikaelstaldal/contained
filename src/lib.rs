@@ -654,6 +654,148 @@ fn podman_cmd(
     Ok(cmd)
 }
 
+pub fn wrapped(
+    program: &Path,
+    arguments: &[String],
+    network: bool,
+    mount_current_dir: bool,
+    mount_current_dir_writable: bool,
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
+    extra_env: &[String],
+    workdir: Option<PathBuf>,
+) -> Result<(), anyhow::Error> {
+    let mut command = bwrap_cmd(
+        program,
+        arguments,
+        network,
+        mount_current_dir,
+        mount_current_dir_writable,
+        mount_readonly,
+        mount_writable,
+        extra_env,
+        workdir,
+    )?;
+
+    let error = command.exec();
+    // If we reach this point, exec failed
+    Err(anyhow::Error::new(error).context("Failed to exec bwrap"))
+}
+
+fn bwrap_cmd(
+    program: &Path,
+    arguments: &[String],
+    network: bool,
+    mount_current_dir: bool,
+    mount_current_dir_writable: bool,
+    mount_readonly: &[PathBuf],
+    mount_writable: &[PathBuf],
+    extra_env: &[String],
+    workdir: Option<PathBuf>,
+) -> Result<Command, anyhow::Error> {
+    let mut cmd = Command::new("bwrap");
+    cmd
+        .arg("--ro-bind")
+        .arg("/usr/bin")
+        .arg("/usr/bin")
+        .arg("--ro-bind")
+        .arg("/usr/sbin")
+        .arg("/usr/sbin")
+        .arg("--ro-bind")
+        .arg("/usr/lib")
+        .arg("/usr/lib")
+        .arg("--ro-bind")
+        .arg("/usr/lib64")
+        .arg("/usr/lib64")
+        .arg("--ro-bind")
+        .arg("/usr/share")
+        .arg("/usr/share")
+        .arg("--symlink")
+        .arg("/usr/lib")
+        .arg("/lib")
+        .arg("--symlink")
+        .arg("/usr/lib64")
+        .arg("/lib64")
+        .arg("--symlink")
+        .arg("/usr/bin")
+        .arg("/bin")
+        .arg("--symlink")
+        .arg("/usr/sbin")
+        .arg("/sbin")
+        .arg("--proc")
+        .arg("/proc")
+        .arg("--dev")
+        .arg("/dev");
+
+    let program = fs::canonicalize(program).context(format!("Program {:?} not found", program))?;
+    let program_dir = program
+        .parent()
+        .ok_or(anyhow!("Invalid path"))?
+        .to_path_buf();
+
+    if mount_current_dir {
+        let current_dir = current_dir()?;
+
+        let home_dir = PathBuf::from(env::var_os("HOME").ok_or(anyhow!("HOME not set"))?);
+        if (current_dir == home_dir) || (home_dir.starts_with(current_dir.as_path())) {
+            return Err(anyhow!(
+                "Cannot run from home directory or its parent directories"
+            ));
+        }
+
+        if mount_current_dir_writable {
+            cmd.arg("--bind");
+        } else {
+            cmd.arg("--ro-bind");
+        }
+        cmd.arg(current_dir.clone()).arg(current_dir.clone());
+
+        cmd.arg("--chdir");
+        if let Some(workdir) = workdir {
+            cmd.arg(workdir);
+        } else {
+            cmd.arg(current_dir.clone());
+        }
+
+        if program_dir != current_dir {
+            cmd.arg("--ro-bind").arg(program_dir.clone()).arg(program_dir.clone());
+        }
+    } else {
+        if let Some(workdir) = workdir {
+            cmd.arg("--chdir").arg(workdir);
+        }
+
+        cmd.arg("--ro-bind").arg(program_dir.clone()).arg(program_dir);
+    }
+
+    for path in mount_readonly {
+        let path = fs::canonicalize(path).context(format!("Mount point {:?} not found", path))?;
+        cmd.arg("--ro-bind").arg(path.clone()).arg(path);
+    }
+    for path in mount_writable {
+        let path = fs::canonicalize(path).context(format!("Mount point {:?} not found", path))?;
+        cmd.arg("--bind").arg(path.clone()).arg(path);
+    }
+
+    for e in extra_env {
+        cmd.arg("--setenv").arg(e);
+    }
+
+    cmd.arg("--new-session");
+    cmd.arg("--unshare-all");
+    if network {
+        cmd.arg("--share-net");
+    }
+
+    cmd.arg(program);
+
+    for arg in arguments {
+        cmd.arg(arg);
+    }
+
+    Ok(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

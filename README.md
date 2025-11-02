@@ -55,3 +55,12 @@ alternative to `docker run`.
 
 Requires Docker daemon, or a compatible daemon (e.g. Podman API service), set `DOCKER_HOST` environment variable 
 unless using standard Docker daemon.
+
+
+## wrapped
+
+Run a program in a sandbox using [bubblewrap](https://github.com/containers/bubblewrap).
+
+### Prerequisites
+
+Requires bubblewrap to be installed and the `bwrap` command to be in `PATH`.
