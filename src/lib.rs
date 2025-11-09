@@ -121,13 +121,7 @@ fn contained_body(
 
     let mut binds = Vec::new();
     let working_dir: &Path;
-    let program_dir_str = program_dir
-        .to_str()
-        .ok_or(anyhow!("Program name is not valid Unicode"))?;
     if mount_current_dir {
-        if program_dir != current_dir {
-            binds.push(Bind::new(program_dir_str, program_dir_str, &["ro"]));
-        }
         let current_dir_str = current_dir
             .to_str()
             .ok_or(anyhow!("Current dir is not valid Unicode"))?;
@@ -138,9 +132,20 @@ fn contained_body(
         ));
         working_dir = workdir.as_deref().unwrap_or(&*current_dir);
     } else {
-        binds.push(Bind::new(program_dir_str, program_dir_str, &["ro"]));
         working_dir = workdir.as_deref().unwrap_or("/".as_ref());
     }
+
+    if !program_dir.starts_with("/usr")
+        && !program_dir.starts_with("/bin")
+        && !program_dir.starts_with("/sbin")
+        && !(mount_current_dir && current_dir == program_dir)
+    {
+        let program_dir_str = program_dir
+            .to_str()
+            .ok_or(anyhow!("Program name is not valid Unicode"))?;
+        binds.push(Bind::new(program_dir_str, program_dir_str, &["ro"]));
+    }
+
     for path in SYSTEM_MOUNTS {
         if Path::new(path).exists() {
             binds.push(Bind::new(path, path, &["ro"]));
@@ -265,18 +270,11 @@ fn contained_cmd(
         .ok_or(anyhow!("Invalid path"))?
         .to_path_buf();
 
-    if mount_current_dir {
-        let current_dir = current_dir()?;
-
-        if program_dir != current_dir {
-            let mut program_dir_arg = OsString::from("type=bind,source=");
-            program_dir_arg.push(program_dir.clone());
-            program_dir_arg.push(",target=");
-            program_dir_arg.push(program_dir.clone());
-            program_dir_arg.push(",readonly");
-            cmd.arg("--mount").arg(program_dir_arg);
-        }
-    } else {
+    if !program_dir.starts_with("/usr")
+        && !program_dir.starts_with("/bin")
+        && !program_dir.starts_with("/sbin")
+        && !(mount_current_dir && current_dir()? == program_dir)
+    {
         let mut program_dir_arg = OsString::from("type=bind,source=");
         program_dir_arg.push(program_dir.clone());
         program_dir_arg.push(",target=");
@@ -670,7 +668,6 @@ pub fn wrapped(
         extra_env,
         workdir,
     )?;
-
     let error = command.exec();
     // If we reach this point, exec failed
     Err(anyhow::Error::new(error).context("Failed to exec bwrap"))
@@ -721,9 +718,9 @@ fn bwrap_cmd(
         .ok_or(anyhow!("Invalid path"))?
         .to_path_buf();
 
-    if mount_current_dir {
-        let current_dir = current_dir()?;
+    let current_dir = current_dir()?;
 
+    if mount_current_dir {
         let home_dir = PathBuf::from(env::var_os("HOME").ok_or(anyhow!("HOME not set"))?);
         if (current_dir == home_dir) || (home_dir.starts_with(current_dir.as_path())) {
             return Err(anyhow!(
@@ -754,7 +751,13 @@ fn bwrap_cmd(
         if let Some(workdir) = workdir {
             cmd.arg("--chdir").arg(workdir);
         }
+    }
 
+    if !program_dir.starts_with("/usr")
+        && !program_dir.starts_with("/bin")
+        && !program_dir.starts_with("/sbin")
+        && !(mount_current_dir && current_dir == program_dir)
+    {
         cmd.arg("--ro-bind")
             .arg(program_dir.clone())
             .arg(program_dir);
