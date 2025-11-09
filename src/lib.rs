@@ -772,8 +772,25 @@ fn bwrap_cmd(
         cmd.arg("--bind").arg(path.clone()).arg(path);
     }
 
+    cmd.arg("--clearenv");
+    for k in ENV {
+        if let Some(v) = env::var_os(k) {
+            cmd.arg("--setenv").arg(k).arg(v);
+        }
+    }
+    cmd.arg("--setenv")
+        .arg("PATH")
+        .arg("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
     for e in extra_env {
-        cmd.arg("--setenv").arg(e);
+        if let Some((k, v)) = e.split_once("=") {
+            cmd.arg("--setenv").arg(k).arg(v);
+        } else {
+            if let Some(v) = env::var_os(e) {
+                cmd.arg("--setenv").arg(e).arg(v);
+            } else {
+                return Err(anyhow!("env var {} is not set", e));
+            }
+        }
     }
 
     cmd.arg("--new-session");
