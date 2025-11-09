@@ -157,8 +157,6 @@ fn contained_body(
 
     let mut tmpfs = Vec::new();
     tmpfs.push(Tmpfs::new("/tmp", &["rw", "exec", "mode=1777"]));
-    tmpfs.push(Tmpfs::new("/run", &["rw", "noexec"]));
-    tmpfs.push(Tmpfs::new("/var/run", &["rw", "noexec"]));
 
     let absolute_working_dir = fs::canonicalize(working_dir)?;
     let absolute_working_dir_str = absolute_working_dir
@@ -295,8 +293,6 @@ fn contained_cmd(
     }
 
     cmd.arg("--tmpfs=/tmp:rw,exec,mode=1777");
-    cmd.arg("--tmpfs=/run:rw,noexec");
-    cmd.arg("--tmpfs=/var/run:rw,noexec");
 
     for e in ENV {
         cmd.arg("-e").arg(e);
@@ -989,7 +985,7 @@ mod tests {
         let network = "host";
         let mount_current_dir = true;
         let mount_current_dir_writable = false;
-        let mount_readonly = [PathBuf::from("/opt"), PathBuf::from("/run")];
+        let mount_readonly = [PathBuf::from("/opt")];
         let mount_writable = [PathBuf::from("/var")];
         let extra_env = ["MY_ENV=123".to_string()];
         let workdir = None;
@@ -1069,7 +1065,7 @@ mod tests {
         let network = "host";
         let mount_current_dir = false;
         let mount_current_dir_writable = false;
-        let mount_readonly = [PathBuf::from("/opt"), PathBuf::from("/run")];
+        let mount_readonly = [PathBuf::from("/opt")];
         let mount_writable = [PathBuf::from("/var")];
         let extra_env = ["MY_ENV=123".to_string()];
         let workdir = None;
