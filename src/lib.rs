@@ -156,8 +156,7 @@ fn contained_body(
     }
 
     let mut tmpfs = Vec::new();
-    tmpfs.push(Tmpfs::new("/tmp", &["rw", "exec"]));
-    tmpfs.push(Tmpfs::new("/var/tmp", &["rw", "exec"]));
+    tmpfs.push(Tmpfs::new("/tmp", &["rw", "exec", "mode=1777"]));
     tmpfs.push(Tmpfs::new("/run", &["rw", "noexec"]));
     tmpfs.push(Tmpfs::new("/var/run", &["rw", "noexec"]));
 
@@ -295,8 +294,7 @@ fn contained_cmd(
         }
     }
 
-    cmd.arg("--tmpfs=/tmp:rw,exec");
-    cmd.arg("--tmpfs=/var/tmp:rw,exec");
+    cmd.arg("--tmpfs=/tmp:rw,exec,mode=1777");
     cmd.arg("--tmpfs=/run:rw,noexec");
     cmd.arg("--tmpfs=/var/run:rw,noexec");
 
