@@ -694,8 +694,7 @@ fn bwrap_cmd(
     workdir: Option<PathBuf>,
 ) -> Result<Command, anyhow::Error> {
     let mut cmd = Command::new("bwrap");
-    cmd
-        .arg("--ro-bind")
+    cmd.arg("--ro-bind")
         .arg("/usr/bin")
         .arg("/usr/bin")
         .arg("--ro-bind")
@@ -722,6 +721,10 @@ fn bwrap_cmd(
         .arg("--symlink")
         .arg("/usr/sbin")
         .arg("/sbin")
+        .arg("--perms")
+        .arg("1777")
+        .arg("--tmpfs")
+        .arg("/tmp")
         .arg("--proc")
         .arg("/proc")
         .arg("--dev")
@@ -758,14 +761,18 @@ fn bwrap_cmd(
         }
 
         if program_dir != current_dir {
-            cmd.arg("--ro-bind").arg(program_dir.clone()).arg(program_dir.clone());
+            cmd.arg("--ro-bind")
+                .arg(program_dir.clone())
+                .arg(program_dir.clone());
         }
     } else {
         if let Some(workdir) = workdir {
             cmd.arg("--chdir").arg(workdir);
         }
 
-        cmd.arg("--ro-bind").arg(program_dir.clone()).arg(program_dir);
+        cmd.arg("--ro-bind")
+            .arg(program_dir.clone())
+            .arg(program_dir);
     }
 
     for path in mount_readonly {
@@ -1125,7 +1132,8 @@ mod tests {
 }
 
 fn resolve_program(program: &Path) -> Result<PathBuf, anyhow::Error> {
-    let program = if !program.is_absolute() && !program.to_str().map_or(false, |s| s.contains('/')) {
+    let program = if !program.is_absolute() && !program.to_str().map_or(false, |s| s.contains('/'))
+    {
         find_in_path(program).ok_or_else(|| anyhow!("Program {:?} not found in PATH", program))?
     } else {
         fs::canonicalize(program).context(format!("Program {:?} not found", program))?
