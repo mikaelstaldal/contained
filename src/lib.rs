@@ -110,7 +110,7 @@ fn contained_body(
     x11: bool,
     tty: &Option<Tty>,
 ) -> Result<Value, anyhow::Error> {
-    let program = fs::canonicalize(program)?;
+    let program = resolve_program(program)?;
     let program_dir = program.parent().ok_or(anyhow!("Invalid path"))?;
     let current_dir = current_dir()?;
     let current_dir_bind_option = [if mount_current_dir_writable {
@@ -262,7 +262,7 @@ fn contained_cmd(
 
     cmd.arg("--read-only");
 
-    let program = fs::canonicalize(program).context(format!("Program {:?} not found", program))?;
+    let program = resolve_program(program)?;
     let program_dir = program
         .parent()
         .ok_or(anyhow!("Invalid path"))?
@@ -727,7 +727,7 @@ fn bwrap_cmd(
         .arg("--dev")
         .arg("/dev");
 
-    let program = fs::canonicalize(program).context(format!("Program {:?} not found", program))?;
+    let program = resolve_program(program)?;
     let program_dir = program
         .parent()
         .ok_or(anyhow!("Invalid path"))?
@@ -1122,4 +1122,37 @@ mod tests {
 
         Ok(())
     }
+}
+
+fn resolve_program(program: &Path) -> Result<PathBuf, anyhow::Error> {
+    let program = if !program.is_absolute() && !program.to_str().map_or(false, |s| s.contains('/')) {
+        find_in_path(program).ok_or_else(|| anyhow!("Program {:?} not found in PATH", program))?
+    } else {
+        fs::canonicalize(program).context(format!("Program {:?} not found", program))?
+    };
+    if is_executable(&program) {
+        Ok(program)
+    } else {
+        Err(anyhow!("Program {:?} not executable", program))
+    }
+}
+
+fn find_in_path(program: &Path) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths).find_map(|dir| {
+            let full_path = dir.join(program);
+            if full_path.is_file() {
+                Some(full_path)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
