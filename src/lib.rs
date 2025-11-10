@@ -45,6 +45,8 @@ const USER_MOUNTS: [&str; 2] = ["/etc/passwd", "/etc/group"];
 
 const X11_SOCKET: &str = "/tmp/.X11-unix";
 
+const SYSTEMD_RESOLVE: &str = "/run/systemd/resolve";
+
 pub fn contained_via_daemon(
     image: &str,
     program: &Path,
@@ -794,9 +796,18 @@ fn bwrap_cmd(
     }
 
     cmd.arg("--new-session");
-    cmd.arg("--unshare-all");
+    cmd.arg("--unshare-user")
+        .arg("--unshare-ipc")
+        .arg("--unshare-pid")
+        .arg("--unshare-cgroup-try");
     if network {
-        cmd.arg("--share-net");
+        if PathBuf::from(SYSTEMD_RESOLVE).is_dir() {
+            cmd.arg("--ro-bind")
+                .arg(SYSTEMD_RESOLVE)
+                .arg(SYSTEMD_RESOLVE);
+        }
+    } else {
+        cmd.arg("--unshare-net").arg("--unshare-uts");
     }
 
     cmd.arg(program);
