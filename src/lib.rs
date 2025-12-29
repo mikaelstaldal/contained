@@ -795,7 +795,6 @@ fn bwrap_cmd(
         }
     }
 
-    cmd.arg("--new-session");
     cmd.arg("--unshare-user")
         .arg("--unshare-ipc")
         .arg("--unshare-pid")
